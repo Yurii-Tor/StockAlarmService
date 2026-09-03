@@ -1,0 +1,63 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "stockalarm",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // The SPA build is served by this same Worker, so the app and the API
+  // share one origin. That is what makes HttpOnly cookie auth work without
+  // CORS and puts the service worker on the API's origin (ADR-0004).
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "stockalarm",
+      "database_id": "PLACEHOLDER_REPLACE_AFTER_wrangler_d1_create",
+      "migrations_dir": "worker/migrations"
+    }
+  ],
+
+  // Quote cache and provider-call accounting live here, NOT in D1,
+  // to protect the 100k/day D1 row-write budget (ASM-028, NFR-06).
+  "kv_namespaces": [
+    { "binding": "CACHE", "id": "PLACEHOLDER_REPLACE_AFTER_wrangler_kv_create" }
+  ],
+
+  "durable_objects": {
+    "bindings": [{ "name": "DISPATCHER", "class_name": "DispatcherDO" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["DispatcherDO"] }
+  ],
+
+  "queues": {
+    "producers": [{ "binding": "DELIVERY_QUEUE", "queue": "stockalarm-delivery" }],
+    "consumers": [
+      {
+        "queue": "stockalarm-delivery",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "stockalarm-delivery-dlq"
+      }
+    ]
+  },
+
+  // 3 of the 5 free-plan cron triggers. See docs/04-operations.md §5.
+  "triggers": {
+    "crons": ["* * * * *", "*/5 * * * *", "0 3 * * *"]
+  },
+
+  "vars": {
+    "APP_BASE_URL": "http://localhost:8787",
+    "MARKET_DATA_PROVIDER": "fake"
+  },
+
+  "observability": { "enabled": true }
+}
