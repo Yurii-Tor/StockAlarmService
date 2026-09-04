@@ -1,0 +1,15 @@
+# Copy to .dev.vars for local development. NEVER commit .dev.vars.
+# Production values are set with: npx wrangler secret put <NAME>
+
+FINNHUB_API_KEY=""
+ONESIGNAL_APP_ID=""
+ONESIGNAL_REST_API_KEY=""
+RESEND_API_KEY=""
+BETTER_AUTH_SECRET=""
+GOOGLE_CLIENT_ID=""
+GOOGLE_CLIENT_SECRET=""
+
+# Leave MARKET_DATA_PROVIDER=fake to develop with the deterministic
+# in-memory provider and make zero external calls.
+MARKET_DATA_PROVIDER="fake"
+APP_BASE_URL="http://localhost:8787"

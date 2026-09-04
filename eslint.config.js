@@ -1,0 +1,75 @@
+// @ts-check
+import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
+
+/**
+ * Two rule groups below are architectural gates, not style preferences.
+ * Both are CI-blocking. See docs/adr/0002 and docs/adr/0003.
+ */
+export default tseslint.config(
+  { ignores: ['**/dist/**', '**/node_modules/**', '**/.wrangler/**', 'web/**'] },
+
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+
+  {
+    // ---------------------------------------------------------------
+    // GATE 1 (FR-0A8, spec §H.2)
+    // "The domain logic must depend on the interface, not directly on
+    //  APNs or a specific email provider."
+    // Enforced mechanically so it cannot rot into a convention.
+    // ---------------------------------------------------------------
+    files: ['worker/src/domain/**/*.ts', 'worker/src/app/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [
+          {
+            group: [
+              'onesignal*', 'react-onesignal', 'resend', 'finnhub*',
+              'drizzle-orm*', 'cloudflare:*', '@cloudflare/*',
+              '**/adapters/**', '**/routes/**', '**/jobs/**',
+            ],
+            message:
+              'Domain and application layers must not depend on providers, ' +
+              'storage or runtime bindings. Depend on a port interface instead ' +
+              '(spec FR-0A8, ADR-0002).',
+          },
+        ],
+      }],
+    },
+  },
+
+  {
+    // ---------------------------------------------------------------
+    // GATE 2 (NFR-05, ADR-0003)
+    // All time enters through the injected Clock port. Ambient clock
+    // access outside adapters makes DST logic untestable and lets
+    // scheduling bugs hide until a transition date.
+    // ---------------------------------------------------------------
+    files: ['worker/src/domain/**/*.ts', 'worker/src/app/**/*.ts'],
+    rules: {
+      'no-restricted-globals': ['error', {
+        name: 'Date',
+        message: 'Use the injected Clock port, not ambient Date (NFR-05, ADR-0003).',
+      }],
+      'no-restricted-syntax': ['error',
+        {
+          selector: "MemberExpression[object.name='Date'][property.name='now']",
+          message: 'Use the injected Clock port, not Date.now() (NFR-05, ADR-0003).',
+        },
+        {
+          selector: "NewExpression[callee.name='Date']",
+          message: 'Use the injected Clock port, not new Date() (NFR-05, ADR-0003).',
+        },
+      ],
+    },
+  },
+
+  {
+    files: ['**/*.ts'],
+    rules: {
+      '@typescript-eslint/consistent-type-imports': 'error',
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    },
+  },
+);
