@@ -1,8 +1,13 @@
 import { defineConfig } from 'vitest/config';
-import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
+import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
 
 // Tests run INSIDE workerd with real D1, Durable Object and Queue bindings,
 // so integration tests exercise the actual runtime rather than mocks of it.
+// The real migrations are applied before each suite, which means the schema
+// invariants (unique dedup key, per-channel deliveries, nullable channels)
+// are enforced by SQLite in tests exactly as they will be in production.
+const migrations = await readD1Migrations('./worker/migrations');
+
 export default defineConfig({
   plugins: [
     cloudflareTest({
@@ -10,10 +15,12 @@ export default defineConfig({
       miniflare: {
         compatibilityDate: '2026-08-22',
         compatibilityFlags: ['nodejs_compat'],
+        bindings: { TEST_MIGRATIONS: migrations },
       },
     }),
   ],
   test: {
     include: ['tests/**/*.test.ts', 'worker/src/**/*.test.ts'],
+    setupFiles: ['./tests/apply-migrations.ts'],
   },
 });

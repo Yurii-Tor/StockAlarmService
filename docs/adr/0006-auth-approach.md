@@ -29,9 +29,15 @@ Beyond that: HttpOnly cookies keep credentials out of JavaScript, which matters 
 - Verification and unsubscribe tokens are stored **hashed**, single-use, and expiring (NFR-08).
 - The *notification* email address may differ from the *account* email (FR-090). They are separate records with separate verification state.
 
-## Open
+## Resolved: no Apple sign-in
 
-- **Sign in with Apple requires an Apple Developer Program membership ($99/yr)** — OQ-1. Not included unless the user already has an account. It is an additive provider; adding it later changes no domain code.
+**Sign in with Apple is out of scope** (OQ-1, closed 2026-09-04). It requires an Apple Developer Program membership at $99/yr, which the user does not hold and does not intend to buy.
+
+This costs nothing architecturally. Providers are additive: adding Apple later is configuration plus a callback route, and changes no domain code. It is worth noting that the same membership is what direct APNs would have required, so declining it is consistent with ADR-0005.
+
+## Known operational dependency
+
+Magic link makes **email deliverability a sign-in dependency**, not merely a notification one. If Resend cannot deliver, users cannot log in. Google OAuth is the mitigation and is why it ships in MVP rather than later (OQ-12, OQ-13).
 
 ## Alternatives rejected
 

@@ -60,5 +60,13 @@ fails. See [ADR-0005](docs/adr/0005-onesignal-web-push-replaces-apns.md).
 
 ## Status
 
-Phase 0 (spec reconstruction and scaffolding). Build order and per-phase exit criteria are
-in [docs/03-traceability.md](docs/03-traceability.md).
+**Phase 1 complete** — deployed at **https://stockalarm.torproduction.com**.
+
+Full D1 schema (23 tables + FTS5), Drizzle, Hono, and magic-link + Google authentication.
+Cron triggers, queues and the dispatcher Durable Object are bound but not yet implemented.
+
+> **Sign-in does not deliver yet.** Magic links are written to the Worker log until a Resend
+> API key is set — `GET /api/v1/health/ready` reports this as `auth.magicLink.delivers`.
+> See OQ-12 in [docs/02-assumptions.md](docs/02-assumptions.md).
+
+Build order and per-phase exit criteria are in [docs/03-traceability.md](docs/03-traceability.md).

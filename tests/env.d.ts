@@ -1,10 +1,15 @@
-// Binds the Worker's Env to the test runner's `env` import so integration
-// tests get real, typed D1/KV/Queue/DO bindings inside workerd.
-import type { Env } from '../worker/src/index';
+// `env` from "cloudflare:test" is typed as Cloudflare.Env, which
+// worker-configuration.d.ts generates from wrangler.jsonc. Only the
+// test-only binding needs declaring here.
+import type { D1Migration } from '@cloudflare/vitest-pool-workers';
 
-declare module 'cloudflare:test' {
-  // Module augmentation requires an interface here; it deliberately adds no
-  // members of its own.
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-  interface ProvidedEnv extends Env {}
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      /** Injected by vitest.config.ts, applied in tests/apply-migrations.ts. */
+      TEST_MIGRATIONS: D1Migration[];
+    }
+  }
 }
+
+export {};
