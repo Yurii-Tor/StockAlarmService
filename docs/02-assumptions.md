@@ -55,8 +55,8 @@ Answer before the phase named in *Blocks*. Recommended defaults apply if unanswe
 
 | id | Question | Recommended default | Blocks |
 |---|---|---|---|
-| OQ-1 | **Sign in with Apple requires an Apple Developer account ($99/yr).** Do you already have one? | Ship magic link + Google; add Apple only if the account exists | Phase 1 |
-| OQ-2 | A **custom domain** is effectively required: Resend needs DKIM to avoid spam folders, and iOS PWA install is nicer on a real name (about $10/yr at Cloudflare Registrar, sold at cost). The alternative is `*.workers.dev` plus Resend's test sender, which only delivers to your own verified address. | Register a domain during Phase 1 | Phase 1 (email), Phase 7 (push) |
+| ~~OQ-1~~ | **RESOLVED 2026-09-04.** No Apple Developer account and none intended. **Apple sign-in is out of scope.** Auth is magic link + Google. | — | Closed |
+| ~~OQ-2~~ | **RESOLVED 2026-09-04.** `torproduction.com` already owned, in the same Cloudflare account. | — | Closed |
 | OQ-3 | **Catch-up after downtime** — if the worker is down three days, do three days of daily reminders all fire at once? | Nothing older than 24h dispatches; older occurrences are created and shown overdue, but silent | Phase 8 |
 | OQ-4 | May a user track the **same instrument in two separate items** (two strategies)? | Allow it; warn in the UI; no unique constraint | Phase 4 |
 | OQ-5 | Should an inbox row be created for events where `in_app` was **not** selected? §E.2 says the inbox must record events when external channels fail; criterion 10 qualifies this with "when that channel was selected". | Inbox rows only when `in_app` is selected; diagnostics shows all events regardless | Phase 5 |
@@ -65,6 +65,9 @@ Answer before the phase named in *Blocks*. Recommended defaults apply if unanswe
 | OQ-8 | **Overdue email digest scope** — all overdue items, or only those with email enabled? | All overdue; the digest is a single opt-in email | Phase 8 |
 | OQ-9 | **Quote history retention** for crossing detection. | 90 days | Phase 9 |
 | OQ-10 | **Price-target polling cadence**, given the provider budget. | Every 5 min during market hours, for instruments with active targets only | Phase 9 |
+| ~~OQ-11~~ | **RESOLVED 2026-09-05.** Host is **`stockalarm.torproduction.com`**, deployed and serving over TLS. The apex is left free. | — | Closed |
+| OQ-12 | **Resend account + verified sending domain.** Sign-in is magic-link, so until this is configured **nobody can sign in to production** — links are written to the Worker log instead of delivered. `GET /health/ready` reports this as `auth.magicLink.delivers: false`. Needs a Resend account, DKIM verification for the sending domain, then `wrangler secret put RESEND_API_KEY`. | Configure before Phase 3 ships a usable UI | Phase 2/3 |
+| OQ-13 | **Google OAuth credentials** — a second sign-in route that does not depend on email deliverability. Redirect URI `https://stockalarm.torproduction.com/api/v1/auth/callback/google`. | Add alongside OQ-12 | Phase 2/3 |
 
 ## E. Facts verified during planning (not assumptions)
 

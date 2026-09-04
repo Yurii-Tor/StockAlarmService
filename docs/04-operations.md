@@ -21,8 +21,36 @@ To exercise cron locally without waiting: `curl "http://localhost:8787/__schedul
 | Env | Purpose | Database |
 |---|---|---|
 | local | Miniflare, in `.wrangler/state` | ephemeral, disposable |
-| preview | Per-PR deploy | `stockalarm-preview` |
-| production | Live | `stockalarm` |
+| production | **https://stockalarm.torproduction.com** | `stockalarm` |
+
+Provisioned Cloudflare resources (account `e693626956842865123018153a6dbc31`):
+
+| Resource | Name | Id |
+|---|---|---|
+| D1 | `stockalarm` | `54c947ff-3c1f-405d-bb81-dd8ecb6c261d` |
+| KV | `CACHE` | `f2334d5b42a34c2faeb1887e085448f6` |
+| Queue | `stockalarm-delivery` | — |
+| Queue (DLQ) | `stockalarm-delivery-dlq` | — |
+| Durable Object | `DispatcherDO` | SQLite-backed |
+
+Deploy with `npm run deploy` (builds the web bundle, then `wrangler deploy`).
+Apply schema changes to production with `npm run db:migrate:remote` **before**
+deploying the code that depends on them.
+
+### Sign-in is not yet deliverable in production
+
+`GET /api/v1/health/ready` reports `auth.magicLink.delivers`. While that is
+`false`, magic links are written to the Worker log instead of being emailed,
+so **no one can sign in to production**. Two secrets close this:
+
+```
+npx wrangler secret put RESEND_API_KEY      # after verifying the sending domain
+npx wrangler secret put GOOGLE_CLIENT_ID    # optional second route in
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+Google OAuth is worth adding precisely because it does not depend on email
+deliverability: if Resend has a bad day, magic-link sign-in stops entirely.
 
 ## 3. Secrets
 

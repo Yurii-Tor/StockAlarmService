@@ -64,7 +64,7 @@ These are binding but not covered by §I, so they need their own tests or they w
 | Phase | Criteria proven | Gate |
 |---|---|---|
 | 0 | — | Consolidated spec signed off; scaffold builds; `npm test` green |
-| 1 | — | Migrations apply; authenticated `/me`; **live HTTPS URL exists**; lint fails on a deliberate domain-layer provider import |
+| 1 ✅ | — | Migrations apply (local + remote); authenticated `/me`; **live HTTPS origin at stockalarm.torproduction.com**; lint fails on a deliberate domain-layer provider import. Schema invariants covered by `schema-invariants.test.ts`, auth flow by `auth.test.ts` |
 | 2 | 1, 2, 3 (API) | No test touches a live provider |
 | 3 | 1, 2, 3 (e2e) | Only quantity is required after choosing "I bought it" |
 | 4 | 4 | Item saves with no reminder and no channels |
