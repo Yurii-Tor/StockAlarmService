@@ -47,6 +47,8 @@ These fill the hole left by the missing base specification. Each is inferred fro
 | ASM-026 | Zero-channel price targets are stored as **passive, clearly marked**, behind a confirmation. | §D.3 explicitly permits either this or forcing in-app. One had to be chosen | Proposed — **confirm** |
 | ASM-027 | The effective-delivery explanation (§E.2) is computed **server-side** via a preview endpoint. | Two implementations of the resolution rules will drift, and the one the user reads would not be the one that runs | Proposed |
 | ASM-028 | Quote caching and provider-call accounting live in **KV, not D1**. | Protects the 100k/day D1 row-write budget. Only genuine domain events consume it | Proposed |
+| ASM-030 | **D1 bills index and FTS shadow writes as rows written.** One instrument insert costs **6** billable rows, not 1 (1 table + 3 index entries + ~2 FTS5). Every row-write estimate must be multiplied by index count plus FTS fan-out. | Getting this wrong caused a real outage on 2026-09-05 — see §E. Any new index on a hot-write table raises the multiplier. | **Confirmed by measurement** |
+| ASM-031 | **The D1 write limit is enforced per ACCOUNT, not per database.** This project shares one 100k/day budget with every other Worker and database on the account. | A bulk job here can take unrelated projects offline, and did. Bulk writes must be self-capping rather than trusting the job to be small. | **Confirmed by incident** |
 | ASM-029 | Delivery is **at-least-once**, bounded by a pre-incremented attempt counter. Exactly-once is not attempted. | Honesty about a real limit; documented rather than hidden | Proposed |
 
 ## D. Open questions
@@ -94,7 +96,7 @@ Recorded so they are not re-litigated.
   **Two consequences for Phase 2, neither anticipated in the original plan:**
 
   1. **There is no exchange *name* field — only the MIC.** Criterion 1 requires the result to show "NASDAQ", not "XNAS", so a MIC-to-display-name map is required. Seven entries covers the US universe; it grows with each exchange added.
-  2. **A full re-sync writes ~31,000 D1 rows, about 31% of the 100k/day free-tier budget** (NFR-06). The nightly sync must therefore be **incremental** — compare against stored rows and write only changes — rather than a truncate-and-reload.
+  2. **A full re-sync writes ~186,000 billable D1 rows, about 186% of the 100k/day free-tier budget** — see the correction in §F below. The nightly sync must be both **incremental** and **write-capped**.
 
 - **Finnhub `/quote` — VERIFIED.** Returns `c` (current), `d`, `dp`, `h`, `l`, `o`, `pc` (previous close) and `t` (provider timestamp, epoch **seconds**). There is **no delay field**: freshness must be computed from `t`, which is precisely the FR-024 two-timestamp design. Observed outside market hours, `t` was **6.5 hours old** while `c` still carried a price — labelling that "current" is exactly the §B.2 violation the freshness model exists to prevent.
 
@@ -114,3 +116,49 @@ Recorded so they are not re-litigated.
 - **OneSignal send API**: `POST https://api.onesignal.com/notifications`, header `Authorization: Key <REST_API_KEY>`, exactly one targeting method per request, `include_aliases.external_id` to reach a specific user. A 200 response **without** an `id` means no valid subscriptions — a skip, not a retryable failure.
 - **OneSignal iOS web push** requires iOS/iPadOS 16.4+, HTTPS, a manifest with `display: standalone`, the OneSignal service worker, and the user must **Add to Home Screen and launch from there** before any permission prompt is possible. A denial is recoverable only by removing and re-adding the home-screen app. The App Store app named "OneSignal Push Notification" is a *sender* utility for developers and cannot receive our notifications.
 - **Local toolchain**: Node v22.18.0, npm 11.5.2, git 2.45.1 — all sufficient. Docker and .NET are **not** required by this stack.
+
+
+## F. Incident: the account-wide D1 write outage, 2026-09-05
+
+Recorded because the mistake was in this document, and because the same
+reasoning error is easy to repeat.
+
+**What happened.** A manual `POST /admin/sync-instruments` at 03:29 UTC seeded
+30,991 US instruments into production. It wrote **177,888 billable D1 rows —
+178% of the daily free-tier budget**. The account crossed the limit around
+03:40 UTC, after which **all D1 writes on the account failed**, including
+those of an unrelated project (`wos-event-reminders`), which logged roughly
+108 errors over the following four hours.
+
+**Two errors combined.**
+
+1. **The estimate counted logical rows, not billable ones.** This file
+   predicted "~31,000 rows, about 31% of the budget". D1 bills index and FTS
+   shadow-table maintenance as rows written, so each insert cost **6**. The
+   real figure was 5.7× the estimate and over the limit before the job could
+   finish. `wrangler d1 insights` reports `avgRowsWritten: 6` for that exact
+   statement — it was measurable at any point, and simply was not measured.
+2. **The blast radius was assumed to be this project.** The limit is
+   per account. A job here can, and did, break something else entirely.
+
+**What was NOT wrong.** The incremental diff (ASM-028, NFR-06) was correctly
+implemented and works: the following night's sync wrote zero rows. The gap was
+that a *first* seed has no diff to exploit, and nothing capped it.
+
+**The fix.** `syncInstrumentUniverse` now takes a row-write budget
+(`SYNC_ROW_WRITE_BUDGET`, 20,000 billable rows — a deliberate fraction of the
+account limit, since the budget is shared). Work beyond the cap is reported as
+`deferred` and picked up on the next run; because the diff is stable, a capped
+seed completes over several nights instead of taking the account down in one.
+Six regression tests in `tests/integration/instruments.test.ts` cover it.
+
+**Also changed.** The `* * * * *` and `*/5 * * * *` cron triggers were removed
+from `wrangler.jsonc`. Their handlers are Phase 5 and Phase 9 stubs, so they
+were costing 1,728 invocations a day to run two empty functions. Each will be
+registered by the phase that implements it.
+
+**Still outstanding, in another repository:** `wos-event-reminders-staging`
+inherits production's per-minute cron — 1,440 invocations a day and a
+competing claim on the same shared write budget, for an environment nobody is
+testing. Giving the staging environment an empty `triggers.crons` is a
+one-line change there.

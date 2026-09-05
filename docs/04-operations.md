@@ -70,7 +70,7 @@ Set with `npx wrangler secret put <NAME>`. **Never** commit any of these; `.dev.
 | Resource | Free limit | Our steady-state use | Guard |
 |---|---|---|---|
 | Worker requests | 100k/day | UI + API calls | Static assets are free and unlimited |
-| **D1 row writes** | **100k/day** | occurrences, events, deliveries, inbox, user edits | Quote cache and provider-call counters live in **KV**, not D1 (ASM-028) |
+| **D1 row writes** | **100k/day, per ACCOUNT** | occurrences, events, deliveries, inbox, user edits | Quote cache and provider counters live in **KV**, not D1 (ASM-028). Bulk syncs are capped (`SYNC_ROW_WRITE_BUDGET`) |
 | D1 row reads | 5M/day | dispatch scans, list views | Partial indexes on the hot paths |
 | Queue operations | 10k/day | one message per delivery | Only notifying occurrences enqueue |
 | KV writes | 1k/day | quote refreshes | Refresh only instruments with active targets |
@@ -78,6 +78,27 @@ Set with `npx wrangler secret put <NAME>`. **Never** commit any of these; `.dev.
 | Cron triggers | 5 | 3 used | every-minute dispatch, 5-minute quotes, nightly sync |
 
 If the D1 write budget is ever approached, the first thing to check is whether anything started writing quotes or provider logs into D1.
+
+### Estimating row writes correctly
+
+**Multiply logical rows by index count plus FTS fan-out.** D1 bills index and
+shadow-table maintenance as rows written. One insert into `instruments` costs
+**6** billable rows, not 1. Estimating this wrong took the whole account
+offline on 2026-09-05 (see `docs/02-assumptions.md` §F).
+
+Measure rather than assume:
+
+```
+npx wrangler d1 insights stockalarm --timePeriod 1d --sort-by writes
+```
+
+`avgRowsWritten` is the real multiplier for each statement. **Adding an index
+to a bulk-written table raises it**, so re-check after any schema change that
+touches `instruments`.
+
+The limit is **per account**, not per database. This project shares it with
+every other Worker and D1 database on the account, so a bulk job here can
+break something unrelated — and once did.
 
 ## 5. Scheduled jobs
 

@@ -18,6 +18,27 @@ import type { ProviderInstrument } from '../../app/ports/market-data';
  * index, so it degrades linearly across ~31,000 rows on every keystroke.
  */
 
+/**
+ * Billable D1 rows per logical instrument row written.
+ *
+ * D1 bills index and FTS shadow-table maintenance as rows written, so one
+ * INSERT into `instruments` is NOT one billable row. Measured, not estimated:
+ * `wrangler d1 insights` reports avgRowsWritten 6 for this exact statement.
+ *
+ *   1  the table row
+ *   3  index entries (ux_instruments_provider_id, ix_instruments_symbol_mic,
+ *      ix_instruments_isin)
+ *  ~2  FTS5 shadow writes via instruments_fts_after_insert
+ *
+ * This constant exists because getting it wrong took the whole Cloudflare
+ * account offline on 2026-09-05: a 30,991-row seed cost 177,888 billable
+ * writes -- 178% of the daily free-tier budget -- and because that limit is
+ * enforced PER ACCOUNT, it blocked writes for an unrelated project too.
+ *
+ * If an index is added to `instruments`, raise this number.
+ */
+export const D1_ROW_WRITE_AMPLIFICATION = 6;
+
 interface InstrumentRow {
   id: string;
   provider: string;
@@ -142,22 +163,16 @@ export class D1InstrumentRepository implements InstrumentRepository {
     provider: string,
     instruments: readonly ProviderInstrument[],
     now: number,
+    maxStatements: number,
   ): Promise<SyncOutcome> {
-    // Read current state once. ~31k row reads against a 5M/day budget is
-    // cheap; WRITES are the scarce resource (100k/day), so the entire point
-    // of this method is to write as few rows as possible (NFR-06).
-    const { results: existingRows } = await this.db
-      .prepare(`select * from instruments where provider = ?1`)
-      .bind(provider)
-      .all<InstrumentRow>();
-
-    const existing = new Map(existingRows.map((r) => [r.provider_instrument_id, r]));
-
     const outcome: SyncOutcome = {
       seen: instruments.length,
       inserted: 0,
       updated: 0,
       unchanged: 0,
+      deferred: 0,
+      budgetExhausted: false,
+      estimatedRowsWritten: 0,
     };
 
     const insertStmt = this.db.prepare(`
@@ -174,75 +189,143 @@ export class D1InstrumentRepository implements InstrumentRepository {
       where id = ?10
     `);
 
-    const statements: D1PreparedStatement[] = [];
+    const incoming = new Map(instruments.map((i) => [i.providerInstrumentId, i]));
+    const seen = new Set<string>();
+    const pending: D1PreparedStatement[] = [];
+    let written = 0;
 
-    for (const incoming of instruments) {
-      const current = existing.get(incoming.providerInstrumentId);
+    const flush = async () => {
+      const WRITE_CHUNK = 50;
+      for (let j = 0; j < pending.length; j += WRITE_CHUNK) {
+        const batch = pending.slice(j, j + WRITE_CHUNK);
+        if (batch.length > 0) await this.db.batch(batch);
+      }
+      written += pending.length;
+      pending.length = 0;
+    };
 
-      if (!current) {
-        statements.push(
-          insertStmt.bind(
-            crypto.randomUUID(),
-            provider,
-            incoming.providerInstrumentId,
-            incoming.symbol,
-            incoming.displayName,
-            incoming.assetType,
-            null,
-            incoming.mic,
-            incoming.currency,
-            incoming.country,
-            incoming.isin,
-            incoming.figi,
-            incoming.isMonitorable ? 1 : 0,
+    const canWrite = () => written + pending.length < maxStatements;
+
+    /**
+     * Existing rows are read by keyset paging, not all at once.
+     *
+     * Two earlier shapes both failed against real data:
+     *   - reading the whole provider universe in one query worked only while
+     *     the table was empty; once ~31,000 rows existed the read itself
+     *     returned a 500 and the nightly sync stopped working;
+     *   - an `IN (...)` list of incoming ids hit D1's hard limit of 100 bound
+     *     parameters per statement.
+     *
+     * Keyset paging over `ux_instruments_provider_id` bounds memory and
+     * response size, uses one bound cursor regardless of universe size, and
+     * costs ~60 reads for a 31,000-row exchange against a 5M/day read budget.
+     */
+    const PAGE = 500;
+    let cursor = '';
+
+    for (;;) {
+      const { results: page } = await this.db
+        .prepare(
+          `select * from instruments
+           where provider = ?1 and provider_instrument_id > ?2
+           order by provider_instrument_id
+           limit ?3`,
+        )
+        .bind(provider, cursor, PAGE)
+        .all<InstrumentRow>();
+
+      if (page.length === 0) break;
+
+      for (const current of page) {
+        const match = incoming.get(current.provider_instrument_id);
+        if (!match) continue; // Delisted upstream; left in place. See below.
+
+        seen.add(current.provider_instrument_id);
+
+        // metadata_updated_at is excluded from the comparison deliberately:
+        // including it would make every row differ on every run and defeat
+        // the entire purpose of an incremental sync.
+        const unchanged =
+          current.symbol === match.symbol &&
+          current.display_name === match.displayName &&
+          current.asset_type === match.assetType &&
+          current.mic === match.mic &&
+          current.currency === match.currency &&
+          current.isin === match.isin &&
+          current.figi === match.figi &&
+          (current.is_monitorable === 1) === match.isMonitorable;
+
+        if (unchanged) {
+          outcome.unchanged += 1;
+          continue;
+        }
+
+        if (!canWrite()) {
+          outcome.deferred += 1;
+          continue;
+        }
+
+        pending.push(
+          updateStmt.bind(
+            match.symbol,
+            match.displayName,
+            match.assetType,
+            match.mic,
+            match.currency,
+            match.isin,
+            match.figi,
+            match.isMonitorable ? 1 : 0,
             now,
+            current.id,
           ),
         );
-        outcome.inserted += 1;
+        outcome.updated += 1;
+      }
+
+      await flush();
+      cursor = page[page.length - 1]!.provider_instrument_id;
+      if (page.length < PAGE) break;
+    }
+
+    // Anything the provider listed that we have never stored.
+    for (const [providerInstrumentId, match] of incoming) {
+      if (seen.has(providerInstrumentId)) continue;
+
+      if (!canWrite()) {
+        outcome.deferred += 1;
         continue;
       }
 
-      // metadata_updated_at is excluded from the comparison deliberately:
-      // including it would make every row differ on every run and defeat the
-      // entire purpose of an incremental sync.
-      const unchanged =
-        current.symbol === incoming.symbol &&
-        current.display_name === incoming.displayName &&
-        current.asset_type === incoming.assetType &&
-        current.mic === incoming.mic &&
-        current.currency === incoming.currency &&
-        current.isin === incoming.isin &&
-        current.figi === incoming.figi &&
-        (current.is_monitorable === 1) === incoming.isMonitorable;
-
-      if (unchanged) {
-        outcome.unchanged += 1;
-        continue;
-      }
-
-      statements.push(
-        updateStmt.bind(
-          incoming.symbol,
-          incoming.displayName,
-          incoming.assetType,
-          incoming.mic,
-          incoming.currency,
-          incoming.isin,
-          incoming.figi,
-          incoming.isMonitorable ? 1 : 0,
+      pending.push(
+        insertStmt.bind(
+          crypto.randomUUID(),
+          provider,
+          providerInstrumentId,
+          match.symbol,
+          match.displayName,
+          match.assetType,
+          null,
+          match.mic,
+          match.currency,
+          match.country,
+          match.isin,
+          match.figi,
+          match.isMonitorable ? 1 : 0,
           now,
-          current.id,
         ),
       );
-      outcome.updated += 1;
+      outcome.inserted += 1;
+
+      if (pending.length >= 500) await flush();
     }
 
-    // Chunked so a large first sync stays inside D1's per-batch limits.
-    const CHUNK = 50;
-    for (let i = 0; i < statements.length; i += CHUNK) {
-      const slice = statements.slice(i, i + CHUNK);
-      if (slice.length > 0) await this.db.batch(slice);
-    }
+    await flush();
+
+    // Rows we hold that the provider no longer lists are deliberately left
+    // alone: a delisting and a provider hiccup look identical here, and
+    // deleting an instrument would orphan any investment item referencing it.
+    outcome.budgetExhausted = outcome.deferred > 0;
+    outcome.estimatedRowsWritten = written * D1_ROW_WRITE_AMPLIFICATION;
 
     return outcome;
   }
