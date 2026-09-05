@@ -70,15 +70,38 @@ export class ResendMailer implements Mailer {
   }
 }
 
+/**
+ * Selects the mail transport.
+ *
+ * `auto` (the default) uses Resend when a key is present and the console
+ * otherwise. `console` forces the log-only transport, which is what tests
+ * pin: without it, adding a real key to .dev.vars makes the suite send
+ * actual email through a live provider. That is not hypothetical -- it was
+ * observed, and it broke the auth tests when Resend rejected the send.
+ */
 export function createMailer(env: {
+  EMAIL_TRANSPORT?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
 }): Mailer {
+  const transport = env.EMAIL_TRANSPORT ?? 'auto';
+
+  if (transport === 'console') return new ConsoleMailer();
+
+  if (transport === 'resend' && !env.RESEND_API_KEY) {
+    // Explicitly asking for Resend without a key is a misconfiguration, not
+    // a reason to silently downgrade to logging links nobody will read.
+    throw new Error(
+      'EMAIL_TRANSPORT=resend but RESEND_API_KEY is not set. Set the secret, or use "console".',
+    );
+  }
+
   if (env.RESEND_API_KEY) {
     return new ResendMailer(
       env.RESEND_API_KEY,
       env.EMAIL_FROM ?? 'StockAlarm <noreply@stockalarm.torproduction.com>',
     );
   }
+
   return new ConsoleMailer();
 }

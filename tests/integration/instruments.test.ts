@@ -109,6 +109,68 @@ describe('instrument sync', () => {
   });
 });
 
+describe('instrument sync at scale', () => {
+  /**
+   * The production US universe is ~31,000 rows. This exercises the chunked
+   * batch path and, more importantly, the claim the whole design rests on:
+   * that a second sync of unchanged data writes NOTHING. If that ever breaks,
+   * the nightly job silently consumes a third of the daily D1 write budget.
+   */
+  const LARGE = 2_000;
+
+  function universe(count: number, renameEvery = 0) {
+    return Array.from({ length: count }, (_, i) => ({
+      providerInstrumentId: `SYN${i}`,
+      symbol: `SYN${i}`,
+      displayName:
+        renameEvery > 0 && i % renameEvery === 0 ? `Synthetic ${i} (renamed)` : `Synthetic ${i}`,
+      assetType: 'stock',
+      mic: 'XNAS',
+      currency: 'USD',
+      country: 'US',
+      isin: null,
+      figi: null,
+      isMonitorable: true,
+    }));
+  }
+
+  it('inserts a large universe, then writes nothing when it has not changed', async () => {
+    const repo = new D1InstrumentRepository(env.DB);
+
+    const first = await repo.upsertChanged('synthetic', universe(LARGE), NOW);
+    expect(first.inserted).toBe(LARGE);
+
+    const second = await repo.upsertChanged('synthetic', universe(LARGE), NOW + 86_400_000);
+    expect(second.unchanged).toBe(LARGE);
+    expect(second.inserted).toBe(0);
+    expect(second.updated).toBe(0);
+  });
+
+  it('writes only the changed rows on a partial update', async () => {
+    const repo = new D1InstrumentRepository(env.DB);
+    await repo.upsertChanged('synthetic', universe(LARGE), NOW);
+
+    // One row in every hundred changed.
+    const outcome = await repo.upsertChanged('synthetic', universe(LARGE, 100), NOW + 1000);
+
+    expect(outcome.updated).toBe(LARGE / 100);
+    expect(outcome.unchanged).toBe(LARGE - LARGE / 100);
+  });
+
+  it('keeps the FTS index in step with a large sync', async () => {
+    const repo = new D1InstrumentRepository(env.DB);
+    await repo.upsertChanged('synthetic', universe(LARGE), NOW);
+
+    const indexed = await env.DB.prepare(
+      `select count(*) as c from instruments_fts`,
+    ).first<{ c: number }>();
+
+    // Triggers, not application code, keep these in step -- so a bulk insert
+    // path that bypassed them would show up here.
+    expect(indexed!.c).toBe(LARGE + FAKE_INSTRUMENTS.length);
+  });
+});
+
 describe('GET /instruments/search (§B.1)', () => {
   it('requires a session', async () => {
     const res = await SELF.fetch(`${ORIGIN}/api/v1/instruments/search?q=MSFT`);
