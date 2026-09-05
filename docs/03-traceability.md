@@ -8,9 +8,9 @@ Maps the addendum's twelve acceptance criteria (§I) to the requirements that im
 
 | # | Criterion (§I) | Requirements | Phase | Proving test |
 |---|---|---|---|---|
-| 1 | `MSFT` search shows company name, NASDAQ, stock type, USD | FR-010–014, FR-021 | 2, 3 | `instrument-search.test.ts` → `search_msft_returns_disambiguated_listing`; e2e `ac-01-search-disambiguation` |
-| 2 | Selection auto-fills symbol, name, exchange, currency, type, price, quote timestamp/freshness, creation time | FR-020–026 | 2, 3 | `draft-from-instrument.test.ts` → `returns_fully_prefilled_draft`; e2e `ac-02-prefill` |
-| 3 | `I bought it` fills date=now, price=quote, fees=0, status=open; all editable | FR-041, FR-043 | 2, 3 | `draft-from-instrument.test.ts` → `buy_intent_prefills_lot_draft`; e2e `ac-03-buy-intent` |
+| 1 | `MSFT` search shows company name, NASDAQ, stock type, USD | FR-010–014, FR-021 | 2, 3 | `instruments.test.ts` (API) + manual browser check. **`ac-01` Playwright spec outstanding** |
+| 2 | Selection auto-fills symbol, name, exchange, currency, type, price, quote timestamp/freshness, creation time | FR-020–026 | 2, 3 | `instruments.test.ts` (API) + manual browser check. **`ac-02` Playwright spec outstanding** |
+| 3 | `I bought it` fills date=now, price=quote, fees=0, status=open; all editable | FR-041, FR-043 | 2, 3 | `instruments.test.ts` (API) + manual browser check. **`ac-03` Playwright spec outstanding** |
 | 4 | Item saves with no review date and no push | FR-045, FR-070 | 4 | e2e `ac-04-save-without-reminder` |
 | 5 | Review date with no channels: visible in calendar, no external delivery | FR-072, FR-075, FR-077, FR-079 | 5 | `dispatch.test.ts` → `empty_channels_creates_no_event`; e2e `ac-05-silent-review` |
 | 6 | Push only, Email only, In-app only, or any combination | FR-071, FR-080 | 7 | `channel-matrix.test.ts` → parameterized over all 7 non-empty subsets; e2e `ac-06-channel-combinations` |
@@ -66,7 +66,7 @@ These are binding but not covered by §I, so they need their own tests or they w
 | 0 | — | Consolidated spec signed off; scaffold builds; `npm test` green |
 | 1 ✅ | — | Migrations apply (local + remote); authenticated `/me`; **live HTTPS origin at stockalarm.torproduction.com**; lint fails on a deliberate domain-layer provider import. Schema invariants covered by `schema-invariants.test.ts`, auth flow by `auth.test.ts` |
 | 2 ✅ | 1, 2, 3 (API) | No test touches a live provider — pinned in `vitest.config.ts`, not left to whether a developer has credentials |
-| 3 | 1, 2, 3 (e2e) | Only quantity is required after choosing "I bought it" |
+| 3 ✅ | 1, 2, 3 (UI) | Only quantity is required after choosing "I bought it" — **verified manually in a browser**, not yet by Playwright. See the note below |
 | 4 | 4 | Item saves with no reminder and no channels |
 | 5 | 5, 11 (+ structural half of 9) | Two concurrent ticks produce exactly one event |
 | 6 | 7, 8, 12 | Email gate enforced at API **and** UI |

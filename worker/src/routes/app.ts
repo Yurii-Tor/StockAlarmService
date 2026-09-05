@@ -5,6 +5,7 @@ import { createMailer } from '../adapters/email/mailer';
 import { createAuth, describeAuthMethods } from '../adapters/auth';
 import { SystemClock } from '../adapters/time/system-clock';
 import { instruments } from './instruments';
+import { admin } from './admin';
 import type { AppContext } from './context';
 
 export const api = new Hono<AppContext>();
@@ -16,7 +17,7 @@ api.use('*', async (c, next) => {
   c.set('db', db);
   c.set('mailer', mailer);
   c.set('clock', new SystemClock());
-  c.set('auth', createAuth(db, c.env, mailer, c.req.url));
+  c.set('auth', createAuth(db, c.env, mailer));
   await next();
 });
 
@@ -74,7 +75,23 @@ api.get('/health/ready', async (c) => {
       status: ready ? 'ready' : 'degraded',
       checks: { database, timeZoneDataOk, tableCount: schemaVersion },
       marketDataProvider: c.env.MARKET_DATA_PROVIDER,
-      auth: describeAuthMethods(c.env, c.get('mailer')),
+      auth: {
+        ...describeAuthMethods(c.env, c.get('mailer')),
+        /**
+         * The origin auth actually resolved for THIS request. Diagnostic,
+         * because it decides both where magic links point and whether session
+         * cookies are marked Secure -- and a Secure cookie issued over http
+         * is dropped by browsers with no error anywhere.
+         */
+        baseUrl: c.env.APP_BASE_URL,
+        /**
+         * False here means browsers will drop the session cookie, because a
+         * `Secure` cookie cannot be set over http. Surfaced rather than left
+         * to be discovered as "sign-in does nothing".
+         */
+        cookiesWillWork:
+          c.env.APP_BASE_URL.startsWith('https://') || c.env.APP_BASE_URL.includes('127.0.0.1') || c.env.APP_BASE_URL.includes('localhost'),
+      },
     },
     ready ? 200 : 503,
   );
@@ -175,6 +192,7 @@ api.get('/me', async (c) => {
 // ---------------------------------------------------------------------------
 
 api.route('/', instruments);
+api.route('/', admin);
 
 // ---------------------------------------------------------------------------
 // Fallback

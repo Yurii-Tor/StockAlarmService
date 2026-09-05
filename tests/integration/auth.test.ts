@@ -123,21 +123,20 @@ describe('magic-link sign-in', () => {
   });
 });
 
-describe('resolveBaseUrl', () => {
-  const configured = 'https://stockalarm.torproduction.com';
-
-  it('uses the loopback origin in local development', () => {
-    // A `Secure` cookie issued over http is silently dropped by browsers, so
-    // sign-in would appear to succeed and leave no session behind.
-    expect(resolveBaseUrl(configured, 'http://localhost:8787/api/v1/me')).toBe(
-      'http://localhost:8787',
+describe('auth base URL', () => {
+  it('comes from configuration, never from the request Host', () => {
+    // An earlier version inferred a loopback origin from the request URL.
+    // It never worked: `wrangler dev` simulates the custom domain from
+    // wrangler.jsonc, so the Host inside the Worker is the production
+    // hostname even on 127.0.0.1. The inference passed its own unit tests
+    // and protected nothing, so it was removed rather than patched.
+    //
+    // The consequence is not cosmetic: this value decides whether session
+    // cookies are marked `Secure`, and a Secure cookie over http is dropped
+    // by browsers silently. Local development sets APP_BASE_URL in .dev.vars.
+    expect(resolveBaseUrl('https://stockalarm.torproduction.com')).toBe(
+      'https://stockalarm.torproduction.com',
     );
-    expect(resolveBaseUrl(configured, 'http://127.0.0.1:8788/x')).toBe('http://127.0.0.1:8788');
-  });
-
-  it('ignores any non-loopback origin, so a spoofed Host cannot steer a magic link', () => {
-    expect(resolveBaseUrl(configured, 'https://evil.example.com/api/v1/me')).toBe(configured);
-    expect(resolveBaseUrl(configured, 'https://stockalarm.torproduction.com/x')).toBe(configured);
-    expect(resolveBaseUrl(configured, 'not a url')).toBe(configured);
+    expect(resolveBaseUrl('http://127.0.0.1:8795')).toBe('http://127.0.0.1:8795');
   });
 });
