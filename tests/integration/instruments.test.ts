@@ -1,8 +1,15 @@
 import { SELF, env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { D1InstrumentRepository } from '../../worker/src/adapters/db/instrument-repository';
+import {
+  D1InstrumentRepository,
+  D1_ROW_WRITE_AMPLIFICATION,
+} from '../../worker/src/adapters/db/instrument-repository';
 import { FAKE_INSTRUMENTS } from '../../worker/src/adapters/marketdata/fake';
-import { syncInstrumentUniverse } from '../../worker/src/app/instruments/sync';
+import {
+  syncInstrumentUniverse,
+  maxStatementsForBudget,
+  SYNC_ROW_WRITE_BUDGET,
+} from '../../worker/src/app/instruments/sync';
 import { FixedClock } from '../../worker/src/domain/time/clock';
 
 /**
@@ -29,7 +36,7 @@ async function resetDb() {
 
 async function seedInstruments() {
   const repo = new D1InstrumentRepository(env.DB);
-  return repo.upsertChanged('fake', FAKE_INSTRUMENTS, NOW);
+  return repo.upsertChanged('fake', FAKE_INSTRUMENTS, NOW, 100_000);
 }
 
 async function signIn(email = 'investor@example.com'): Promise<string> {
@@ -75,7 +82,7 @@ describe('instrument sync', () => {
       i.symbol === 'MSFT' ? { ...i, displayName: 'Microsoft Corp (renamed)' } : i,
     );
     const repo = new D1InstrumentRepository(env.DB);
-    const outcome = await repo.upsertChanged('fake', changed, NOW + 1000);
+    const outcome = await repo.upsertChanged('fake', changed, NOW + 1000, 100_000);
 
     expect(outcome.updated).toBe(1);
     expect(outcome.unchanged).toBe(FAKE_INSTRUMENTS.length - 1);
@@ -137,10 +144,10 @@ describe('instrument sync at scale', () => {
   it('inserts a large universe, then writes nothing when it has not changed', async () => {
     const repo = new D1InstrumentRepository(env.DB);
 
-    const first = await repo.upsertChanged('synthetic', universe(LARGE), NOW);
+    const first = await repo.upsertChanged('synthetic', universe(LARGE), NOW, 100_000);
     expect(first.inserted).toBe(LARGE);
 
-    const second = await repo.upsertChanged('synthetic', universe(LARGE), NOW + 86_400_000);
+    const second = await repo.upsertChanged('synthetic', universe(LARGE), NOW + 86_400_000, 100_000);
     expect(second.unchanged).toBe(LARGE);
     expect(second.inserted).toBe(0);
     expect(second.updated).toBe(0);
@@ -148,10 +155,10 @@ describe('instrument sync at scale', () => {
 
   it('writes only the changed rows on a partial update', async () => {
     const repo = new D1InstrumentRepository(env.DB);
-    await repo.upsertChanged('synthetic', universe(LARGE), NOW);
+    await repo.upsertChanged('synthetic', universe(LARGE), NOW, 100_000);
 
     // One row in every hundred changed.
-    const outcome = await repo.upsertChanged('synthetic', universe(LARGE, 100), NOW + 1000);
+    const outcome = await repo.upsertChanged('synthetic', universe(LARGE, 100), NOW + 1000, 100_000);
 
     expect(outcome.updated).toBe(LARGE / 100);
     expect(outcome.unchanged).toBe(LARGE - LARGE / 100);
@@ -159,7 +166,7 @@ describe('instrument sync at scale', () => {
 
   it('keeps the FTS index in step with a large sync', async () => {
     const repo = new D1InstrumentRepository(env.DB);
-    await repo.upsertChanged('synthetic', universe(LARGE), NOW);
+    await repo.upsertChanged('synthetic', universe(LARGE), NOW, 100_000);
 
     const indexed = await env.DB.prepare(
       `select count(*) as c from instruments_fts`,
@@ -168,6 +175,98 @@ describe('instrument sync at scale', () => {
     // Triggers, not application code, keep these in step -- so a bulk insert
     // path that bypassed them would show up here.
     expect(indexed!.c).toBe(LARGE + FAKE_INSTRUMENTS.length);
+  });
+});
+
+describe('sync write budget (the guard that prevents an account outage)', () => {
+  /**
+   * On 2026-09-05 an unthrottled seed of 30,991 instruments wrote 177,888
+   * billable D1 rows -- 178% of the daily free-tier budget. Because D1's
+   * write limit is enforced PER ACCOUNT, it blocked writes for an unrelated
+   * project on the same account for roughly four hours.
+   *
+   * These tests exist so that cannot happen again from this code path.
+   */
+  function universe(count: number) {
+    return Array.from({ length: count }, (_, i) => ({
+      providerInstrumentId: `CAP${i}`,
+      symbol: `CAP${i}`,
+      displayName: `Capped ${i}`,
+      assetType: 'stock',
+      mic: 'XNAS',
+      currency: 'USD',
+      country: 'US',
+      isin: null,
+      figi: null,
+      isMonitorable: true,
+    }));
+  }
+
+  it('writes only up to the cap and defers the rest', async () => {
+    const repo = new D1InstrumentRepository(env.DB);
+    const outcome = await repo.upsertChanged('capped', universe(500), NOW, 100);
+
+    expect(outcome.inserted).toBe(100);
+    expect(outcome.deferred).toBe(400);
+    expect(outcome.budgetExhausted).toBe(true);
+    expect(outcome.seen).toBe(500);
+  });
+
+  it('reports billable rows using the measured amplification, not row count', () => {
+    // The whole incident came from counting logical rows and ignoring index
+    // and FTS fan-out. 100 statements is 600 billable rows, not 100.
+    expect(D1_ROW_WRITE_AMPLIFICATION).toBe(6);
+  });
+
+  it('estimates the true billable cost of a run', async () => {
+    const repo = new D1InstrumentRepository(env.DB);
+    const outcome = await repo.upsertChanged('capped', universe(50), NOW, 1000);
+
+    expect(outcome.inserted).toBe(50);
+    expect(outcome.estimatedRowsWritten).toBe(50 * D1_ROW_WRITE_AMPLIFICATION);
+  });
+
+  it('drains the backlog across successive runs', async () => {
+    const repo = new D1InstrumentRepository(env.DB);
+    const all = universe(250);
+
+    const first = await repo.upsertChanged('capped', all, NOW, 100);
+    const second = await repo.upsertChanged('capped', all, NOW, 100);
+    const third = await repo.upsertChanged('capped', all, NOW, 100);
+
+    expect(first.inserted).toBe(100);
+    expect(second.inserted).toBe(100);
+    expect(third.inserted).toBe(50);
+
+    // A deferred row still differs on the next run, so the stable diff is
+    // what makes a capped seed eventually complete.
+    expect(third.budgetExhausted).toBe(false);
+    expect(third.deferred).toBe(0);
+
+    const stored = await env.DB.prepare(
+      `select count(*) as c from instruments where provider = 'capped'`,
+    ).first<{ c: number }>();
+    expect(stored!.c).toBe(250);
+  });
+
+  it('keeps a full US-sized seed inside the account budget', () => {
+    // 30,991 instruments at 6 rows each is 185,946 billable writes against a
+    // 100,000/day account limit. The cap must make one run affordable.
+    const perRun = maxStatementsForBudget();
+    expect(perRun * D1_ROW_WRITE_AMPLIFICATION).toBeLessThanOrEqual(SYNC_ROW_WRITE_BUDGET);
+    expect(perRun * D1_ROW_WRITE_AMPLIFICATION).toBeLessThan(100_000);
+
+    const runsNeeded = Math.ceil(30_991 / perRun);
+    expect(runsNeeded).toBeGreaterThan(1);
+  });
+
+  it('never writes when the budget is zero', async () => {
+    const repo = new D1InstrumentRepository(env.DB);
+    const outcome = await repo.upsertChanged('capped', universe(10), NOW, 0);
+
+    expect(outcome.inserted).toBe(0);
+    expect(outcome.deferred).toBe(10);
+    expect(outcome.estimatedRowsWritten).toBe(0);
   });
 });
 

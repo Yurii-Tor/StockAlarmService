@@ -49,9 +49,13 @@
     ]
   },
 
-  // 3 of the 5 free-plan cron triggers. See docs/04-operations.md §5.
+  // Only the nightly sync is registered, because it is the only handler that
+  // does anything. The dispatch tick (Phase 5) and quote refresh (Phase 9)
+  // are stubs; registering them early cost 1,728 invocations a day to run two
+  // empty functions, and put a per-minute Worker on an account whose D1 write
+  // budget is shared. Re-add each one WITH the phase that implements it.
   "triggers": {
-    "crons": ["* * * * *", "*/5 * * * *", "0 3 * * *"]
+    "crons": ["0 3 * * *"]
   },
 
   // Single origin for the app, the API and the service worker (ADR-0004).

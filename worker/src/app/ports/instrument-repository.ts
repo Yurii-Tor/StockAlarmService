@@ -40,16 +40,17 @@ export interface InstrumentRepository {
   findByProviderId(provider: string, providerInstrumentId: string): Promise<StoredInstrument | null>;
 
   /**
-   * Insert or update only what actually changed.
+   * Insert or update only what actually changed, never exceeding
+   * `maxStatements` writes in one call.
    *
-   * A full US universe is ~31,000 rows, and rewriting all of them nightly
-   * would consume roughly a third of the 100k/day D1 write budget to change
-   * almost nothing (NFR-06). Implementations must diff, not truncate.
+   * The cap is not a tuning knob -- it is the guard that stops a first seed
+   * from taking the whole account offline. See SyncOutcome below.
    */
   upsertChanged(
     provider: string,
     instruments: readonly ProviderInstrument[],
     now: number,
+    maxStatements: number,
   ): Promise<SyncOutcome>;
 }
 
@@ -58,4 +59,14 @@ export interface SyncOutcome {
   inserted: number;
   updated: number;
   unchanged: number;
+  /**
+   * Changes identified but deliberately NOT written, because writing them
+   * would have exceeded the run's budget. They are picked up next run: the
+   * diff is stable, so a deferred row still differs tomorrow.
+   */
+  deferred: number;
+  /** True when `deferred > 0`; the universe is not yet fully synced. */
+  budgetExhausted: boolean;
+  /** Billable D1 rows this run is estimated to have cost. */
+  estimatedRowsWritten: number;
 }

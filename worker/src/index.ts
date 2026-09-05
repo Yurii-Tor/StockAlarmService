@@ -45,13 +45,25 @@ async function runNightlySync(env: Env): Promise<void> {
   for (const exchange of SYNCED_EXCHANGES) {
     const report = await syncInstrumentUniverse(provider, repo, clock, exchange);
 
-    // Logged as one structured line per exchange: `inserted` and `updated`
-    // are the numbers that consume the D1 write budget, so a sudden jump in
-    // either is the signal that the incremental diff has stopped working
-    // (NFR-06).
-    console.log(
-      JSON.stringify({ event: 'instrument_sync', ...report }),
-    );
+    // One structured line per exchange. `estimatedRowsWritten` is the number
+    // that matters: D1's write limit is per ACCOUNT, so this job competes
+    // with every other database on it (see sync.ts for what happened when it
+    // did not).
+    console.log(JSON.stringify({ event: 'instrument_sync', ...report }));
+
+    if (report.budgetExhausted) {
+      // Not an error: the cap did its job. But the universe is incomplete
+      // until subsequent runs drain the backlog, and silence here would look
+      // identical to a finished sync.
+      console.warn(
+        JSON.stringify({
+          event: 'instrument_sync_incomplete',
+          exchange,
+          deferred: report.deferred,
+          reason: 'write budget reached; remaining rows resume on the next run',
+        }),
+      );
+    }
   }
 }
 
@@ -75,13 +87,10 @@ export default {
         ctx.waitUntil(runNightlySync(env));
         return;
 
-      case '*/5 * * * *':
-        // Phase 9: quote refresh for instruments with active price targets.
-        return;
-
-      case '* * * * *':
-        // Phase 5: the §H.1 dispatch tick, via DispatcherDO.
-        return;
+      // The dispatch tick (Phase 5) and quote refresh (Phase 9) are NOT
+      // registered in wrangler.jsonc yet. Register each one in the phase that
+      // implements it, not before -- an empty per-minute cron costs 1,440
+      // invocations a day and buys nothing.
 
       default:
         console.log(`unhandled cron: ${event.cron}`);
