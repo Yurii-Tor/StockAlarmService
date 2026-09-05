@@ -116,3 +116,63 @@ Work down this list; each step is answerable from data the system already record
 - **Push on iOS is best-effort** (ADR-0005). Email and the in-app inbox are the reliable channels there.
 - **Finnhub free tier** is roughly 60 calls/minute and does not include ISIN. Search is served from our own synced `instruments` table, so a provider outage degrades quotes only, not search.
 - **D1 export excludes FTS5 virtual tables.** The account-export path reads base tables directly.
+
+
+## 9. Adding Google sign-in
+
+Google OAuth is worth having because it is the one sign-in route that does not
+depend on email deliverability: if Resend has a bad day, magic-link sign-in
+stops entirely and nobody can get in.
+
+Nothing here can be automated — it requires signing in to Google Cloud as the
+account owner.
+
+1. Open <https://console.cloud.google.com/> and create a project (or pick one).
+2. **APIs & Services → OAuth consent screen.** Choose *External*, set the app
+   name and support email, and add your own address as a test user. While the
+   app is in *Testing*, only listed test users can sign in — that is fine for
+   personal use and avoids Google's verification review entirely.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**,
+   application type **Web application**.
+4. Add **Authorised JavaScript origin**:
+
+   ```
+   https://stockalarm.torproduction.com
+   ```
+
+5. Add **Authorised redirect URI** — this must match exactly, including the
+   `/api/v1` prefix, because Better Auth is mounted there rather than at the
+   default `/api/auth`:
+
+   ```
+   https://stockalarm.torproduction.com/api/v1/auth/callback/google
+   ```
+
+   For local development add a second redirect URI:
+
+   ```
+   http://localhost:8787/api/v1/auth/callback/google
+   ```
+
+6. Copy the client ID and secret, then:
+
+   ```
+   npx wrangler secret put GOOGLE_CLIENT_ID
+   npx wrangler secret put GOOGLE_CLIENT_SECRET
+   npx wrangler deploy
+   ```
+
+7. Confirm it took effect:
+
+   ```
+   curl https://stockalarm.torproduction.com/api/v1/health/ready
+   ```
+
+   `auth.google.available` flips to `true`. The provider is registered only
+   when **both** secrets are present, so a half-configured client is inert
+   rather than producing a broken sign-in button.
+
+Sign-in then starts at `/api/v1/auth/sign-in/social` with `{"provider":"google"}`.
+
+**Do not** put the client secret in `wrangler.jsonc` or `.dev.vars.example`.
+For local development it belongs in `.dev.vars`, which is gitignored.
