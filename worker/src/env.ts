@@ -15,6 +15,7 @@ declare global {
       GOOGLE_CLIENT_ID?: string;
       GOOGLE_CLIENT_SECRET?: string;
       RESEND_API_KEY?: string;
+      EMAIL_TRANSPORT?: string;
       EMAIL_FROM?: string;
       FINNHUB_API_KEY?: string;
       ONESIGNAL_APP_ID?: string;

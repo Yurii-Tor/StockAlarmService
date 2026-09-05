@@ -65,7 +65,7 @@ These are binding but not covered by §I, so they need their own tests or they w
 |---|---|---|
 | 0 | — | Consolidated spec signed off; scaffold builds; `npm test` green |
 | 1 ✅ | — | Migrations apply (local + remote); authenticated `/me`; **live HTTPS origin at stockalarm.torproduction.com**; lint fails on a deliberate domain-layer provider import. Schema invariants covered by `schema-invariants.test.ts`, auth flow by `auth.test.ts` |
-| 2 | 1, 2, 3 (API) | No test touches a live provider |
+| 2 ✅ | 1, 2, 3 (API) | No test touches a live provider — pinned in `vitest.config.ts`, not left to whether a developer has credentials |
 | 3 | 1, 2, 3 (e2e) | Only quantity is required after choosing "I bought it" |
 | 4 | 4 | Item saves with no reminder and no channels |
 | 5 | 5, 11 (+ structural half of 9) | Two concurrent ticks produce exactly one event |

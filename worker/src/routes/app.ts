@@ -1,13 +1,13 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
 import { createDb, schema, type Database } from '../adapters/db/client';
-import { createMailer, type Mailer } from '../adapters/email/mailer';
-import { createAuth, describeAuthMethods, type Auth } from '../adapters/auth';
-import type { Env } from '../env';
+import { createMailer } from '../adapters/email/mailer';
+import { createAuth, describeAuthMethods } from '../adapters/auth';
+import { SystemClock } from '../adapters/time/system-clock';
+import { instruments } from './instruments';
+import type { AppContext } from './context';
 
-type Vars = { db: Database; auth: Auth; mailer: Mailer };
-
-export const api = new Hono<{ Bindings: Env; Variables: Vars }>();
+export const api = new Hono<AppContext>();
 
 /** Per-request wiring. D1 and KV bindings are per-invocation, not global. */
 api.use('*', async (c, next) => {
@@ -15,6 +15,7 @@ api.use('*', async (c, next) => {
   const mailer = createMailer(c.env);
   c.set('db', db);
   c.set('mailer', mailer);
+  c.set('clock', new SystemClock());
   c.set('auth', createAuth(db, c.env, mailer, c.req.url));
   await next();
 });
@@ -168,6 +169,12 @@ api.get('/me', async (c) => {
       : null,
   });
 });
+
+// ---------------------------------------------------------------------------
+// Instruments (§G.1) and the prefilled draft (§G.2)
+// ---------------------------------------------------------------------------
+
+api.route('/', instruments);
 
 // ---------------------------------------------------------------------------
 // Fallback

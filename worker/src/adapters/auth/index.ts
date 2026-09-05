@@ -134,11 +134,15 @@ export function describeAuthMethods(env: AuthEnv, mailer: Mailer) {
   return {
     magicLink: {
       available: true,
-      // A console mailer means links are logged, not delivered -- usable for
-      // local development, useless in production. Say so rather than
-      // reporting a healthy channel.
       transport: mailer.name,
-      delivers: mailer.name !== 'console',
+      /**
+       * Whether a REAL transport is wired up -- not whether mail actually
+       * arrives. A configured provider can still bounce every message when
+       * its sending domain is unverified, so this must not be read as proof
+       * of deliverability; it only rules out the console fallback, where
+       * links are printed to the log and reach nobody.
+       */
+      transportConfigured: mailer.name !== 'console',
     },
     google: { available: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) },
     apple: { available: false, reason: 'Requires a paid Apple Developer account (OQ-1)' },

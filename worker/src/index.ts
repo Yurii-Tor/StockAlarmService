@@ -1,5 +1,9 @@
 import { Hono } from 'hono';
 import { api } from './routes/app';
+import { syncInstrumentUniverse } from './app/instruments/sync';
+import { D1InstrumentRepository } from './adapters/db/instrument-repository';
+import { createProvider } from './adapters/marketdata';
+import { SystemClock } from './adapters/time/system-clock';
 import type { Env } from './env';
 
 export type { Env };
@@ -30,6 +34,27 @@ export class DispatcherDO implements DurableObject {
   }
 }
 
+/** Exchanges whose universe is synced nightly. */
+const SYNCED_EXCHANGES = ['US'] as const;
+
+async function runNightlySync(env: Env): Promise<void> {
+  const provider = createProvider(env);
+  const repo = new D1InstrumentRepository(env.DB);
+  const clock = new SystemClock();
+
+  for (const exchange of SYNCED_EXCHANGES) {
+    const report = await syncInstrumentUniverse(provider, repo, clock, exchange);
+
+    // Logged as one structured line per exchange: `inserted` and `updated`
+    // are the numbers that consume the D1 write budget, so a sudden jump in
+    // either is the signal that the incremental diff has stopped working
+    // (NFR-06).
+    console.log(
+      JSON.stringify({ event: 'instrument_sync', ...report }),
+    );
+  }
+}
+
 const app = new Hono<{ Bindings: Env }>();
 
 app.route('/api/v1', api);
@@ -40,12 +65,27 @@ app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
 export default {
   fetch: app.fetch,
 
-  async scheduled(event: ScheduledController): Promise<void> {
-    // Phase 5 wires these to DispatcherDO; see docs/04-operations.md §5.
-    //   * * * * *   -> dispatch tick
-    //   */5 * * * * -> quote refresh for instruments with active targets
-    //   0 3 * * *   -> symbol-universe sync, retention pruning, digest
-    console.log(`cron fired: ${event.cron}`);
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    switch (event.cron) {
+      case '0 3 * * *':
+        // Nightly instrument-universe sync. This is what makes local search
+        // possible, and therefore what makes acceptance criterion 1
+        // achievable: provider search endpoints return no exchange, MIC or
+        // currency, but the per-exchange listing does.
+        ctx.waitUntil(runNightlySync(env));
+        return;
+
+      case '*/5 * * * *':
+        // Phase 9: quote refresh for instruments with active price targets.
+        return;
+
+      case '* * * * *':
+        // Phase 5: the §H.1 dispatch tick, via DispatcherDO.
+        return;
+
+      default:
+        console.log(`unhandled cron: ${event.cron}`);
+    }
   },
 
   async queue(batch: MessageBatch<unknown>): Promise<void> {
