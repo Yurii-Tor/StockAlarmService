@@ -60,13 +60,17 @@ fails. See [ADR-0005](docs/adr/0005-onesignal-web-push-replaces-apns.md).
 
 ## Status
 
-**Phase 1 complete** — deployed at **https://stockalarm.torproduction.com**.
+**Phase 2 complete** — deployed at **https://stockalarm.torproduction.com**.
 
-Full D1 schema (23 tables + FTS5), Drizzle, Hono, and magic-link + Google authentication.
-Cron triggers, queues and the dispatcher Durable Object are bound but not yet implemented.
+Full D1 schema (23 tables + FTS5), instrument search over a synced universe, quotes with a
+four-state freshness model, and the prefilled quick-add draft API. Magic-link and Google
+sign-in both work in production.
 
-> **Sign-in does not deliver yet.** Magic links are written to the Worker log until a Resend
-> API key is set — `GET /api/v1/health/ready` reports this as `auth.magicLink.delivers`.
-> See OQ-12 in [docs/02-assumptions.md](docs/02-assumptions.md).
+Verified against live data: a real sync pulls **30,991 US instruments in ~21 s**, and
+searching `MSFT` returns `MSFT — MICROSOFT CORP` / `NASDAQ · Stock · USD` — acceptance
+criterion 1, end to end.
+
+Cron triggers, queues and the dispatcher Durable Object are bound; the nightly instrument
+sync is live, and the dispatch and delivery handlers arrive in Phases 5 and 7.
 
 Build order and per-phase exit criteria are in [docs/03-traceability.md](docs/03-traceability.md).

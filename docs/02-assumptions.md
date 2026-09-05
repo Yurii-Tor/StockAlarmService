@@ -66,9 +66,10 @@ Answer before the phase named in *Blocks*. Recommended defaults apply if unanswe
 | OQ-9 | **Quote history retention** for crossing detection. | 90 days | Phase 9 |
 | OQ-10 | **Price-target polling cadence**, given the provider budget. | Every 5 min during market hours, for instruments with active targets only | Phase 9 |
 | ~~OQ-11~~ | **RESOLVED 2026-09-05.** Host is **`stockalarm.torproduction.com`**, deployed and serving over TLS. The apex is left free. | — | Closed |
-| OQ-12 | **Resend account + verified sending domain.** Sign-in is magic-link, so until this is configured **nobody can sign in to production** — links are written to the Worker log instead of delivered. `GET /health/ready` reports this as `auth.magicLink.delivers: false`. Needs a Resend account, DKIM verification for the sending domain, then `wrangler secret put RESEND_API_KEY`. | Configure before Phase 3 ships a usable UI | Phase 2/3 |
-| OQ-13 | **Google OAuth credentials** — a second sign-in route that does not depend on email deliverability. Redirect URI `https://stockalarm.torproduction.com/api/v1/auth/callback/google`. Setup steps in `docs/04-operations.md` §9. | Add alongside OQ-12 | Phase 2/3 |
-| OQ-14 | **MIC-to-exchange-name map.** Finnhub returns `mic` only (`XNAS`), but criterion 1 requires the result to read "NASDAQ". Seven MICs cover the US universe; confirm the display names to use. | `XNAS`→NASDAQ, `XNYS`→NYSE, `ARCX`→NYSE Arca, `XASE`→NYSE American, `BATS`→Cboe BZX, `IEXG`→IEX, `OOTC`→OTC | Phase 2 |
+| ~~OQ-12~~ | **RESOLVED 2026-09-05.** Resend key set and `stockalarm.torproduction.com` verified — a live send from `noreply@stockalarm.torproduction.com` returned 200 with a message id (an unverified domain returns 403). Magic-link sign-in works in production. | — | Closed |
+| ~~OQ-13~~ | **RESOLVED 2026-09-05.** Google client configured; `auth.google.available` is `true` in production. Setup steps kept in `docs/04-operations.md` §9. | — | Closed |
+| ~~OQ-14~~ | **RESOLVED 2026-09-05.** Implemented in `domain/instruments/exchanges.ts` with the seven US venues. Unknown MICs fall back to the MIC itself, so a missing mapping is visible rather than silently wrong. | — | Closed |
+| OQ-15 | **Company names arrive in all-caps** from Finnhub (`MICROSOFT CORP`, not `Microsoft Corporation`). Criterion 1 is satisfied either way, but the result reads as shouting. Title-casing is risky to automate — it mangles `AT&T`, `3M`, `iRobot`, `eBay` — so provider names are left verbatim. | Revisit if it grates in the UI | Phase 3 |
 
 ## E. Facts verified during planning (not assumptions)
 
@@ -97,7 +98,16 @@ Recorded so they are not re-litigated.
 
 - **Finnhub `/quote` — VERIFIED.** Returns `c` (current), `d`, `dp`, `h`, `l`, `o`, `pc` (previous close) and `t` (provider timestamp, epoch **seconds**). There is **no delay field**: freshness must be computed from `t`, which is precisely the FR-024 two-timestamp design. Observed outside market hours, `t` was **6.5 hours old** while `c` still carried a price — labelling that "current" is exactly the §B.2 violation the freshness model exists to prevent.
 
-- **The Resend API key supplied is send-only** (`restricted_api_key`). It cannot list or create domains, so domain verification must be done in the Resend dashboard. Until a sending domain is verified, Resend delivers only from `onboarding@resend.dev` and only to the account owner's own address — so magic-link sign-in still will not reach arbitrary users (OQ-12 remains open).
+- **The Resend API key supplied is send-only** (`restricted_api_key`). It cannot list or create domains, so verification had to happen in the dashboard, and a live send is the only check such a key permits. Confirmed 2026-09-05: a send from `noreply@stockalarm.torproduction.com` returned 200 with a message id.
+
+- **The full Finnhub pipeline was exercised end-to-end on 2026-09-05**, not just the endpoint shapes. A real sync pulled **30,991 US instruments in 21.4 s**, and search over the FTS5 index then returned, for `MSFT`:
+
+  ```text
+  MSFT — MICROSOFT CORP
+  NASDAQ · Stock · USD
+  ```
+
+  which is acceptance criterion 1 satisfied against live data. The live quote returned `price 499.7` with `quoteAsOf` 6.5 h behind — the stale-out-of-hours case, correctly classified as `stale` rather than presented as current.
 - **Cloudflare Containers is paid-only** ($5/mo Workers Paid plan), so .NET cannot run on Cloudflare for free. Workers execute JS/TS/Rust/Python only.
 - **Cloudflare free tier**: 100k requests/day; D1 5 GB with 5M row reads and 100k row writes per day; Durable Objects SQLite-backed, with alarms; Queues 10k ops/day with 24h retention; KV 100k reads and 1k writes per day; static asset requests free and unlimited; cron triggers included; 10 ms CPU per invocation, where I/O wait does not count.
 - **D1 supports SQLite FTS5**, including `fts5vocab`. D1 export does not support virtual tables, so export reads base tables directly.
