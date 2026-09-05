@@ -19,6 +19,19 @@ const MIC_TO_NAME: Readonly<Record<string, string>> = {
   BATS: 'Cboe BZX',
   IEXG: 'IEX',
   OOTC: 'OTC',
+
+  // Not synced today (only the US universe is), but present so a second
+  // market does not immediately render raw MICs to users.
+  XLON: 'London Stock Exchange',
+  XETR: 'Xetra',
+  XFRA: 'Frankfurt',
+  XPAR: 'Euronext Paris',
+  XAMS: 'Euronext Amsterdam',
+  XSWX: 'SIX Swiss',
+  XTSE: 'Toronto',
+  XTKS: 'Tokyo',
+  XHKG: 'Hong Kong',
+  XWAR: 'Warsaw',
 };
 
 /**

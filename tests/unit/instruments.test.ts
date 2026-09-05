@@ -115,8 +115,15 @@ describe('MIC to exchange name (OQ-14)', () => {
   });
 
   it('falls back to the MIC rather than inventing a name', () => {
-    expect(exchangeNameForMic('XLON')).toBe('XLON');
+    // An unmapped venue shows its MIC. Unhelpful but honest -- and it makes
+    // the gap visible instead of silently degrading the result.
+    expect(exchangeNameForMic('XZZZ')).toBe('XZZZ');
     expect(exchangeNameForMic(null)).toBeNull();
+  });
+
+  it('names the major non-US venues it knows', () => {
+    expect(exchangeNameForMic('XLON')).toBe('London Stock Exchange');
+    expect(exchangeNameForMic('xetr')).toBe('Xetra');
   });
 });
 

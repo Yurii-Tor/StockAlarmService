@@ -12,4 +12,12 @@ GOOGLE_CLIENT_SECRET=""
 # Leave MARKET_DATA_PROVIDER=fake to develop with the deterministic
 # in-memory provider and make zero external calls.
 MARKET_DATA_PROVIDER="fake"
-APP_BASE_URL="http://localhost:8787"
+# MUST match the origin you browse to in development. Session cookies are
+# marked Secure when this is https, and browsers drop Secure cookies over
+# http with no error -- sign-in then appears to succeed but no session exists.
+APP_BASE_URL="http://127.0.0.1:8787"
+
+# Keep local work off live services: fixture market data, and magic links
+# printed to the log instead of emailed.
+EMAIL_TRANSPORT="console"
+ADMIN_TOKEN="local-dev-admin-token"

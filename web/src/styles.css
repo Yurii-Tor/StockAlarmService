@@ -1,0 +1,43 @@
+@import 'tailwindcss';
+
+/*
+ * Mobile-first: the product is meant to be opened from a phone home screen
+ * (ADR-0005), so layout is designed for a narrow viewport and widened, not
+ * the reverse.
+ */
+@theme {
+  --color-surface: oklch(99% 0.003 260);
+  --color-surface-raised: oklch(100% 0 0);
+  --color-border-subtle: oklch(91% 0.006 260);
+  --color-ink: oklch(22% 0.015 260);
+  --color-ink-muted: oklch(52% 0.014 260);
+  --color-accent: oklch(52% 0.16 258);
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-surface: oklch(19% 0.012 260);
+    --color-surface-raised: oklch(23% 0.014 260);
+    --color-border-subtle: oklch(32% 0.014 260);
+    --color-ink: oklch(95% 0.006 260);
+    --color-ink-muted: oklch(70% 0.012 260);
+    --color-accent: oklch(72% 0.14 258);
+  }
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular figures everywhere a price or quantity appears: proportional
+   digits make columns of numbers jitter as values update. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}

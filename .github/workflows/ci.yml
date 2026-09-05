@@ -21,8 +21,11 @@ jobs:
       - name: Lint (includes layering + clock gates)
         run: npm run lint
 
-      - name: Typecheck
+      - name: Typecheck (worker)
         run: npm run typecheck
+
+      - name: Typecheck (web)
+        run: npm run typecheck --workspace web
 
       - name: Unit and integration tests (workerd)
         run: npm test

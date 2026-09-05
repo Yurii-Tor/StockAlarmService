@@ -16,6 +16,8 @@ declare global {
       GOOGLE_CLIENT_SECRET?: string;
       RESEND_API_KEY?: string;
       EMAIL_TRANSPORT?: string;
+      /** Enables the operator endpoints. Unset means they 404. */
+      ADMIN_TOKEN?: string;
       EMAIL_FROM?: string;
       FINNHUB_API_KEY?: string;
       ONESIGNAL_APP_ID?: string;

@@ -26,38 +26,31 @@ export interface AuthEnv {
 }
 
 /**
- * The origin this request actually arrived on.
+ * The origin this deployment serves.
  *
- * Configured APP_BASE_URL is the production origin, but in local development
- * the server is plain http on localhost. Deriving the base URL from the
- * request keeps two things correct that otherwise break silently:
+ * Taken from configuration, NOT inferred from the request. An earlier version
+ * tried to detect loopback from `c.req.url` and silently never worked:
+ * `wrangler dev` simulates the custom domain declared in wrangler.jsonc, so
+ * the request Host inside the Worker is always the production hostname even
+ * when serving http on 127.0.0.1. The check looked correct, passed its unit
+ * tests, and protected nothing.
  *
- *  - magic-link URLs point at the running server, not production;
- *  - cookies are only marked `Secure` over https. A `Secure` cookie issued
- *    over http is silently dropped by every browser, so sign-in appears to
- *    succeed and then the session simply does not exist.
+ * It matters because this value decides two things that fail silently:
+ *   - where magic links point;
+ *   - whether session cookies are marked `Secure`. A Secure cookie issued
+ *     over http is dropped by every browser with no error, so sign-in appears
+ *     to succeed and leaves no session behind. curl does not care, which is
+ *     why the earlier bug survived a curl-based check.
  *
- * Only loopback origins are trusted to override; anything else uses the
- * configured value, so a spoofed Host header cannot redirect a magic link.
+ * Local development therefore sets APP_BASE_URL explicitly in .dev.vars.
  */
-export function resolveBaseUrl(configured: string, requestUrl: string): string {
-  try {
-    const origin = new URL(requestUrl).origin;
-    const host = new URL(origin).hostname;
-    if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') {
-      return origin;
-    }
-  } catch {
-    // Fall through to the configured value.
-  }
+export function resolveBaseUrl(configured: string): string {
   return configured;
 }
 
-export function createAuth(db: Database, env: AuthEnv, mailer: Mailer, requestUrl?: string) {
+export function createAuth(db: Database, env: AuthEnv, mailer: Mailer) {
   const googleConfigured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
-  const baseURL = requestUrl
-    ? resolveBaseUrl(env.APP_BASE_URL, requestUrl)
-    : env.APP_BASE_URL;
+  const baseURL = resolveBaseUrl(env.APP_BASE_URL);
 
   return betterAuth({
     baseURL,

@@ -12,7 +12,7 @@
     "web"
   ],
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --port 4321 --local --ip 127.0.0.1",
     "build": "npm run build --workspace web",
     "deploy": "npm run build && wrangler deploy",
     "test": "vitest run",
