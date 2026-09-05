@@ -62,7 +62,9 @@
 
   "vars": {
     "APP_BASE_URL": "https://stockalarm.torproduction.com",
-    "MARKET_DATA_PROVIDER": "fake"
+    // "auto" uses Finnhub when FINNHUB_API_KEY is set, else the
+    // deterministic fake. Set "fake" to force fixtures.
+    "MARKET_DATA_PROVIDER": "auto"
   },
 
   "observability": { "enabled": true }
