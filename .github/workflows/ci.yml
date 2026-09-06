@@ -32,3 +32,13 @@ jobs:
 
       - name: Build web
         run: npm run build
+
+      # WebKit at an iPhone viewport: the engine and form factor ADR-0005
+      # targets. These catch what API tests structurally cannot -- cookie
+      # rules, rendered labels, and which handler actually answers a browser
+      # navigation.
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps webkit
+
+      - name: Browser acceptance tests
+        run: npm run test:e2e

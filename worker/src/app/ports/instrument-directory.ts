@@ -54,7 +54,13 @@ export interface InstrumentDirectory {
   lookupMany(symbols: readonly string[]): Promise<Map<string, DirectoryEntry>>;
 
   /**
-   * Replaces the directory with `entries`, writing only shards that changed.
+   * Replaces the ENTIRE directory with `entries`, writing only shards that
+   * changed.
+   *
+   * "Entire" is load-bearing. Shards are keyed by leading symbol character,
+   * not by exchange, so `VOD` (NASDAQ) and `VOD.L` (London) share shard `V`.
+   * Refreshing one exchange at a time therefore deletes the other's symbols
+   * from every shared shard. Callers must pass every exchange at once.
    *
    * Deliberately compares before writing. The symbol universe is almost
    * static day to day, so a naive rewrite would spend the entire KV write

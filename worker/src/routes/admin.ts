@@ -45,13 +45,25 @@ admin.post('/admin/refresh-directory', async (c) => {
   if (outcome === 'disabled') return problem(c, 404, 'Not Found');
   if (outcome === 'unauthorized') return problem(c, 401, 'Unauthorized', 'Invalid admin token.');
 
-  const exchange = c.req.query('exchange');
+  /**
+   * Comma-separated, and deliberately plural.
+   *
+   * A refresh REPLACES the whole directory, and shards are keyed by symbol
+   * rather than by exchange — so a single-exchange refresh silently deletes
+   * every other exchange's symbols that share a shard. The parameter names
+   * the complete set to publish, not an increment to add.
+   */
+  const requested = c.req
+    .query('exchanges')
+    ?.split(',')
+    .map((e) => e.trim())
+    .filter((e) => e.length > 0);
 
   const report = await refreshInstrumentDirectory(
     createProvider(c.env),
     new KvInstrumentDirectory(c.env.CACHE),
     c.get('clock'),
-    exchange ? [exchange] : undefined,
+    requested && requested.length > 0 ? requested : undefined,
   );
 
   // 502 when the provider failed, so a monitoring check cannot read a failed
