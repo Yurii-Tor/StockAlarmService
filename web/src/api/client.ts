@@ -1,4 +1,13 @@
-import type { DraftResponse, Me, Quote, SearchResponse } from './types';
+import type {
+  CreateItemBody,
+  DraftResponse,
+  FieldError,
+  ItemDetail,
+  ItemSummary,
+  Me,
+  Quote,
+  SearchResponse,
+} from './types';
 
 /**
  * API client.
@@ -13,6 +22,8 @@ export class ApiError extends Error {
     readonly status: number,
     readonly title: string,
     detail?: string,
+    /** Present on 422: per-field validation failures. */
+    readonly errors: FieldError[] = [],
   ) {
     super(detail ?? title);
     this.name = 'ApiError';
@@ -28,12 +39,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as
-      | { title?: string; detail?: string }
+      | { title?: string; detail?: string; errors?: FieldError[] }
       | null;
     throw new ApiError(
       response.status,
       body?.title ?? response.statusText,
       body?.detail,
+      body?.errors ?? [],
     );
   }
 
@@ -70,6 +82,37 @@ export const api = {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
+    }),
+
+  createItem: (body: CreateItemBody) =>
+    request<ItemDetail>('/investment-items', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  listItems: () => request<{ items: ItemSummary[] }>('/investment-items'),
+
+  getItem: (id: string) => request<ItemDetail>(`/investment-items/${id}`),
+
+  deleteItem: (id: string) =>
+    request<null>(`/investment-items/${id}`, { method: 'DELETE' }),
+
+  thesisVersions: (id: string) =>
+    request<{
+      versions: Array<{
+        versionNo: number;
+        body: string;
+        changeSummary: string | null;
+        createdAt: number;
+      }>;
+    }>(`/investment-items/${id}/thesis/versions`),
+
+  saveThesis: (id: string, body: string, changeSummary?: string) =>
+    request<{ versionNo: number }>(`/investment-items/${id}/thesis`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ body, changeSummary: changeSummary ?? null }),
     }),
 };
 

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { TickerSearch } from '../components/TickerSearch';
 import { DraftForm } from '../components/DraftForm';
-import { api } from '../api/client';
-import type { DraftResponse, SearchResult } from '../api/types';
+import { api, ApiError } from '../api/client';
+import type { CreateItemBody, DraftResponse, SearchResult } from '../api/types';
 
 /**
  * The quick-add flow (§B.1 → §C.1).
@@ -23,6 +23,9 @@ export function AddInvestment() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const loadDraft = useCallback(
     async (ref: string, nextIntent: 'watching' | 'open') => {
@@ -70,6 +73,26 @@ export function AddInvestment() {
     }
   }
 
+  async function save(body: CreateItemBody) {
+    setSaving(true);
+    setSaveError(null);
+    setFieldErrors({});
+    try {
+      const created = await api.createItem(body);
+      navigate(`/items/${created.id}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.errors.length > 0) {
+        // Server-side validation is authoritative; surface it per field
+        // rather than replacing it with a generic message.
+        setFieldErrors(Object.fromEntries(err.errors.map((e) => [e.field, e.message])));
+      } else {
+        setSaveError(err instanceof Error ? err.message : 'Could not save');
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <main className="mx-auto max-w-2xl px-5 py-8">
       <header className="mb-6 flex items-center gap-3">
@@ -101,6 +124,10 @@ export function AddInvestment() {
           onIntentChange={setIntent}
           onRefreshQuote={refreshQuote}
           refreshing={refreshing}
+          onSave={save}
+          saving={saving}
+          fieldErrors={fieldErrors}
+          saveError={saveError}
         />
       ) : null}
     </main>

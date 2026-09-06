@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { DraftResponse } from '../api/types';
+import type { CreateItemBody, DraftResponse } from '../api/types';
 import { FreshnessBadge, PriceLine, QuoteProvenance } from './FreshnessBadge';
 import { instrumentSubtitle } from '../lib/format';
 
@@ -21,6 +21,11 @@ export interface DraftFormProps {
   onIntentChange: (intent: 'watching' | 'open') => void;
   onRefreshQuote: () => void;
   refreshing: boolean;
+  onSave: (body: CreateItemBody) => void;
+  saving: boolean;
+  /** Server-side validation failures, keyed by field path. */
+  fieldErrors?: Record<string, string>;
+  saveError?: string | null;
 }
 
 function Field({
@@ -50,6 +55,10 @@ export function DraftForm({
   onIntentChange,
   onRefreshQuote,
   refreshing,
+  onSave,
+  saving,
+  fieldErrors = {},
+  saveError = null,
 }: DraftFormProps) {
   const item = draft.investmentItemDraft;
   const lot = draft.lotDraft;
@@ -249,11 +258,47 @@ export function DraftForm({
         <button
           type="button"
           data-testid="save"
-          disabled={quantityMissing || priceMissing}
+          disabled={quantityMissing || priceMissing || saving}
+          onClick={() =>
+            onSave({
+              instrumentRef: item.instrumentRef,
+              intent,
+              timezone: item.timezone,
+              ...(intent === 'open'
+                ? {
+                    lot: {
+                      quantity: quantity.trim(),
+                      entryPrice: entryPrice.trim(),
+                      fees: fees.trim() || '0',
+                      brokerName: broker.trim() || null,
+                      // Provenance travels with the value: if the user left
+                      // the prefilled quote untouched, say so (FR-043).
+                      entryPriceSource:
+                        lot && entryPrice.trim() === (lot.entryPrice ?? '')
+                          ? lot.entryPriceSource
+                          : 'manual',
+                      quoteAsOf: lot?.quoteAsOf ? Date.parse(lot.quoteAsOf) : null,
+                    },
+                  }
+                : {}),
+              ...(thesis.trim() ? { thesis: { body: thesis.trim() } } : {}),
+            })
+          }
           className="w-full rounded-xl bg-(--color-accent) px-4 py-3 text-sm font-semibold text-white disabled:opacity-40"
         >
-          Save
+          {saving ? 'Saving…' : 'Save'}
         </button>
+
+        {saveError ? (
+          <p data-testid="save-error" className="mt-2 text-center text-xs text-red-600 dark:text-red-400">
+            {saveError}
+          </p>
+        ) : null}
+        {Object.entries(fieldErrors).map(([field, message]) => (
+          <p key={field} className="mt-1 text-center text-xs text-red-600 dark:text-red-400">
+            {message}
+          </p>
+        ))}
         {quantityMissing || priceMissing ? (
           <p data-testid="required-hint" className="mt-2 text-center text-xs text-(--color-ink-muted)">
             {quantityMissing && priceMissing
@@ -262,11 +307,7 @@ export function DraftForm({
                 ? 'Quantity is required — everything else is filled in.'
                 : 'Entry price is required because no quote was available.'}
           </p>
-        ) : (
-          <p className="mt-2 text-center text-xs text-(--color-ink-muted)">
-            Saving arrives in the next phase — this flow is complete up to the commit.
-          </p>
-        )}
+        ) : null}
       </section>
     </div>
   );

@@ -101,3 +101,67 @@ export interface Me {
     overdueDigestMode: string;
   } | null;
 }
+
+export interface ItemSummary {
+  id: string;
+  symbol: string;
+  displayName: string;
+  assetType: string;
+  exchange: string | null;
+  currency: string;
+  status: string;
+  timezone: string;
+  createdAt: number;
+  instrumentRef: string | null;
+  /** Per-currency only. Totals are never summed across items (FR-053). */
+  totalQuantity: string | null;
+  totalFees: string | null;
+  averageEntryPrice: string | null;
+  lotCount: number;
+  hasThesis: boolean;
+}
+
+export interface ItemLot {
+  id: string;
+  boughtAt: number;
+  quantity: string;
+  entryPrice: string;
+  currency: string;
+  fees: string;
+  brokerName: string | null;
+  entryPriceSource: 'manual' | 'latest_quote';
+  entryPriceQuoteAsOf: number | null;
+}
+
+export interface ItemDetail extends ItemSummary {
+  lots: ItemLot[];
+  thesis: { currentVersionNo: number; body: string; versionCount: number } | null;
+}
+
+export interface CreateItemBody {
+  instrumentRef?: string;
+  manual?: {
+    symbol: string;
+    displayName: string;
+    assetType: string;
+    currency: string;
+    exchange?: string | null;
+  };
+  intent: 'watching' | 'open';
+  timezone?: string;
+  lot?: {
+    quantity: string;
+    entryPrice: string;
+    fees?: string;
+    brokerName?: string | null;
+    entryPriceSource?: 'manual' | 'latest_quote';
+    quoteAsOf?: number | null;
+  };
+  thesis?: { body: string; templateId?: string | null };
+}
+
+/** 422 body from the API: which field failed and why. */
+export interface FieldError {
+  field: string;
+  message: string;
+}
