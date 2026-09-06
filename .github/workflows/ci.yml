@@ -3,6 +3,9 @@ name: CI
 on:
   push: { branches: [main, develop] }
   pull_request:
+  # Lets a run be re-triggered by hand. Useful when GitHub drops a push event,
+  # which it did while this workflow was being added.
+  workflow_dispatch:
 
 jobs:
   verify:
