@@ -5,6 +5,7 @@ import { createMailer } from '../adapters/email/mailer';
 import { createAuth, describeAuthMethods } from '../adapters/auth';
 import { SystemClock } from '../adapters/time/system-clock';
 import { instruments } from './instruments';
+import { investmentItems } from './investment-items';
 import { admin } from './admin';
 import type { AppContext } from './context';
 
@@ -192,6 +193,7 @@ api.get('/me', async (c) => {
 // ---------------------------------------------------------------------------
 
 api.route('/', instruments);
+api.route('/', investmentItems);
 api.route('/', admin);
 
 // ---------------------------------------------------------------------------

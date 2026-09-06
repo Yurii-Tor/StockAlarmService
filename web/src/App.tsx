@@ -5,6 +5,7 @@ import type { Me } from './api/types';
 import { Login } from './routes/Login';
 import { Dashboard } from './routes/Dashboard';
 import { AddInvestment } from './routes/AddInvestment';
+import { ItemDetail } from './routes/ItemDetail';
 
 /**
  * Session gate.
@@ -53,6 +54,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<Dashboard me={me} />} />
         <Route path="/add" element={<AddInvestment />} />
+        <Route path="/items/:id" element={<ItemDetail />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

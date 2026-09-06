@@ -11,7 +11,7 @@ Maps the addendum's twelve acceptance criteria (§I) to the requirements that im
 | 1 | `MSFT` search shows company name, NASDAQ, stock type, USD | FR-010–014, FR-021 | 2, 3 | `instruments.test.ts` (API) + manual browser check. **`ac-01` Playwright spec outstanding** |
 | 2 | Selection auto-fills symbol, name, exchange, currency, type, price, quote timestamp/freshness, creation time | FR-020–026 | 2, 3 | `instruments.test.ts` (API) + manual browser check. **`ac-02` Playwright spec outstanding** |
 | 3 | `I bought it` fills date=now, price=quote, fees=0, status=open; all editable | FR-041, FR-043 | 2, 3 | `instruments.test.ts` (API) + manual browser check. **`ac-03` Playwright spec outstanding** |
-| 4 | Item saves with no review date and no push | FR-045, FR-070 | 4 | e2e `ac-04-save-without-reminder` |
+| 4 ✅ | Item saves with no review date and no push | FR-045, FR-070 | 4 | `portfolio.test.ts` → `saves a watchlist item with no review date and no notification config` — asserts **zero** rows in review_reminders, review_occurrences and notification_events |
 | 5 | Review date with no channels: visible in calendar, no external delivery | FR-072, FR-075, FR-077, FR-079 | 5 | `dispatch.test.ts` → `empty_channels_creates_no_event`; e2e `ac-05-silent-review` |
 | 6 | Push only, Email only, In-app only, or any combination | FR-071, FR-080 | 7 | `channel-matrix.test.ts` → parameterized over all 7 non-empty subsets; e2e `ac-06-channel-combinations` |
 | 7 | Separate global defaults per category; a reminder overrides them | FR-077, FR-082, FR-083 | 6 | `channel-resolver.test.ts` → `override_beats_default`, `defaults_are_per_category`; e2e `ac-07-defaults-and-override` |
@@ -31,9 +31,9 @@ These are binding but not covered by §I, so they need their own tests or they w
 | FR-023 / FR-026 never label stale data "current" | 3 | `freshness-badge.test.tsx` → `word_current_only_for_realtime` |
 | FR-031 metadata retained when quote fails | 2 | `quote.test.ts` → `provider_timeout_returns_unavailable_with_metadata` |
 | FR-033 / FR-066 non-monitorable assets cannot activate targets | 9 | `price-target.test.ts` → `non_monitorable_cannot_activate` |
-| FR-045 quick-add saves atomically | 4 | `create-item.test.ts` → `partial_failure_rolls_back_everything` |
-| FR-053 no cross-currency totals | 4 | `position-summary.test.ts` → `mixed_currency_items_are_not_summed` |
-| FR-054 thesis is append-only | 4 | `thesis.test.ts` → `save_creates_version_never_updates` |
+| FR-045 quick-add saves atomically | 4 | `portfolio.test.ts` → `rejects a purchase with no quantity, and writes nothing` |
+| FR-053 no cross-currency totals | 4 | Structural: an item carries one currency and items are never summed. The UI states "All figures in <currency>" |
+| FR-054 thesis is append-only | 4 | `portfolio.test.ts` → `never overwrites a revision` |
 | FR-063 zero-channel target stored as passive | 9 | `price-target.test.ts` → `no_channels_stored_as_passive` |
 | FR-078 / NFR-01 DST correctness | 5 | `review-schedule.test.ts` → full zone matrix (below) |
 | FR-093 thesis text excluded from email | 7 | `email-template.test.ts` → `body_excludes_thesis_by_default` |
@@ -67,7 +67,7 @@ These are binding but not covered by §I, so they need their own tests or they w
 | 1 ✅ | — | Migrations apply (local + remote); authenticated `/me`; **live HTTPS origin at stockalarm.torproduction.com**; lint fails on a deliberate domain-layer provider import. Schema invariants covered by `schema-invariants.test.ts`, auth flow by `auth.test.ts` |
 | 2 ✅ | 1, 2, 3 (API) | No test touches a live provider — pinned in `vitest.config.ts`, not left to whether a developer has credentials |
 | 3 ✅ | 1, 2, 3 (UI) | Only quantity is required after choosing "I bought it" — **verified manually in a browser**, not yet by Playwright. See the note below |
-| 4 | 4 | Item saves with no reminder and no channels |
+| 4 ✅ | 4 | Item saves with no reminder and no channels |
 | 5 | 5, 11 (+ structural half of 9) | Two concurrent ticks produce exactly one event |
 | 6 | 7, 8, 12 | Email gate enforced at API **and** UI |
 | 7 | 6, 9, 10 | Push failure does not block email; a real iPhone receives a push |
