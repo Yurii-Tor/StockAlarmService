@@ -3,7 +3,8 @@
 export type QuoteFreshness = 'realtime' | 'delayed' | 'stale' | 'unavailable';
 
 export interface SearchResult {
-  instrumentId: string;
+  /** `provider:symbol`. No stored row exists until the user saves. */
+  instrumentRef: string;
   symbol: string;
   displayName: string;
   assetType: string;
@@ -13,6 +14,8 @@ export interface SearchResult {
   isin: string | null;
   figi: string | null;
   isMonitorable: boolean;
+  /** False when the directory has no venue/currency for this symbol. */
+  metadataKnown: boolean;
   disambiguationLabel: string;
   isAmbiguousSymbol: boolean;
   primaryLine: string;
@@ -25,7 +28,7 @@ export interface SearchResponse {
 }
 
 export interface Quote {
-  instrumentId: string;
+  instrumentRef: string;
   price: string | null;
   currency: string | null;
   quoteAsOf: string | null;
@@ -45,7 +48,7 @@ export interface Quote {
 }
 
 export interface InvestmentItemDraft {
-  instrumentId: string;
+  instrumentRef: string;
   symbol: string;
   name: string;
   assetType: string;

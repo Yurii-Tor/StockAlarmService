@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { api } from './routes/app';
-import { syncInstrumentUniverse } from './app/instruments/sync';
-import { D1InstrumentRepository } from './adapters/db/instrument-repository';
+import { refreshInstrumentDirectory } from './app/instruments/directory-refresh';
+import { KvInstrumentDirectory } from './adapters/cache/kv-instrument-directory';
 import { createProvider } from './adapters/marketdata';
 import { SystemClock } from './adapters/time/system-clock';
 import type { Env } from './env';
@@ -34,37 +34,25 @@ export class DispatcherDO implements DurableObject {
   }
 }
 
-/** Exchanges whose universe is synced nightly. */
-const SYNCED_EXCHANGES = ['US'] as const;
+/**
+ * Refreshes the KV instrument directory.
+ *
+ * D1 is deliberately untouched here. The predecessor of this job wrote 31,000
+ * D1 rows and took the account offline; the directory now lives in KV, where
+ * an unchanged day costs zero writes. A D1 row is created only when the user
+ * saves an investment item.
+ */
+async function runDirectoryRefresh(env: Env): Promise<void> {
+  const report = await refreshInstrumentDirectory(
+    createProvider(env),
+    new KvInstrumentDirectory(env.CACHE),
+    new SystemClock(),
+  );
 
-async function runNightlySync(env: Env): Promise<void> {
-  const provider = createProvider(env);
-  const repo = new D1InstrumentRepository(env.DB);
-  const clock = new SystemClock();
-
-  for (const exchange of SYNCED_EXCHANGES) {
-    const report = await syncInstrumentUniverse(provider, repo, clock, exchange);
-
-    // One structured line per exchange. `estimatedRowsWritten` is the number
-    // that matters: D1's write limit is per ACCOUNT, so this job competes
-    // with every other database on it (see sync.ts for what happened when it
-    // did not).
-    console.log(JSON.stringify({ event: 'instrument_sync', ...report }));
-
-    if (report.budgetExhausted) {
-      // Not an error: the cap did its job. But the universe is incomplete
-      // until subsequent runs drain the backlog, and silence here would look
-      // identical to a finished sync.
-      console.warn(
-        JSON.stringify({
-          event: 'instrument_sync_incomplete',
-          exchange,
-          deferred: report.deferred,
-          reason: 'write budget reached; remaining rows resume on the next run',
-        }),
-      );
-    }
-  }
+  // `kvWrites` is the number to watch: it should normally be 0. A refresh
+  // that writes every shard nightly means the change comparison has broken,
+  // and the KV budget is 1,000 writes/day.
+  console.log(JSON.stringify({ event: 'directory_refresh', ...report }));
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -80,11 +68,10 @@ export default {
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     switch (event.cron) {
       case '0 3 * * *':
-        // Nightly instrument-universe sync. This is what makes local search
-        // possible, and therefore what makes acceptance criterion 1
-        // achievable: provider search endpoints return no exchange, MIC or
-        // currency, but the per-exchange listing does.
-        ctx.waitUntil(runNightlySync(env));
+        // Refreshes the searchable directory. Search itself is live against
+        // the provider; this supplies the venue and currency that provider
+        // search omits, which acceptance criterion 1 requires.
+        ctx.waitUntil(runDirectoryRefresh(env));
         return;
 
       // The dispatch tick (Phase 5) and quote refresh (Phase 9) are NOT

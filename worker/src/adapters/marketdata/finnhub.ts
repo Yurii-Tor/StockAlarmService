@@ -3,6 +3,7 @@ import {
   type MarketDataProvider,
   type ProviderInstrument,
   type ProviderQuote,
+  type ProviderSearchHit,
 } from '../../app/ports/market-data';
 
 /**
@@ -31,6 +32,16 @@ interface FinnhubSymbolRow {
   currency?: string;
   figi?: string;
   isin?: string;
+}
+
+interface FinnhubSearchResponse {
+  count?: number;
+  result?: Array<{
+    symbol?: string;
+    displaySymbol?: string;
+    description?: string;
+    type?: string;
+  }>;
 }
 
 interface FinnhubQuoteResponse {
@@ -91,6 +102,38 @@ export class FinnhubMarketDataProvider implements MarketDataProvider {
     } catch (cause) {
       throw new MarketDataUnavailable('Finnhub returned unreadable JSON', cause, true);
     }
+  }
+
+  /**
+   * Live symbol search.
+   *
+   * Verified 2026-09-05: returns only `symbol`, `displaySymbol`, `description`
+   * and `type` -- no exchange, MIC or currency. It therefore cannot satisfy
+   * acceptance criterion 1 alone, and callers enrich hits from the directory.
+   *
+   * It does distinguish venues by symbol suffix (`VOD`, `VOD.JO`, `VOD.VI`),
+   * which is what makes §B.1 disambiguation possible without a local index.
+   */
+  async search(query: string): Promise<ProviderSearchHit[]> {
+    const response = await this.get<FinnhubSearchResponse>('/search', { q: query });
+    const rows = response.result ?? [];
+
+    const seen = new Set<string>();
+    const hits: ProviderSearchHit[] = [];
+
+    for (const row of rows) {
+      const symbol = (row.displaySymbol || row.symbol || '').trim();
+      if (!symbol || seen.has(symbol)) continue; // The API repeats listings.
+      seen.add(symbol);
+
+      hits.push({
+        symbol,
+        displayName: row.description?.trim() || symbol,
+        assetType: mapAssetType(row.type),
+      });
+    }
+
+    return hits;
   }
 
   async listInstruments(exchange: string): Promise<ProviderInstrument[]> {

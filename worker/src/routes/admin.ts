@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import { syncInstrumentUniverse } from '../app/instruments/sync';
-import { D1InstrumentRepository } from '../adapters/db/instrument-repository';
+import { refreshInstrumentDirectory } from '../app/instruments/directory-refresh';
+import { KvInstrumentDirectory } from '../adapters/cache/kv-instrument-directory';
 import { createProvider } from '../adapters/marketdata';
 import type { AppContext } from './context';
 import { problem } from './context';
@@ -40,21 +40,21 @@ function authorize(c: { env: { ADMIN_TOKEN?: string }; req: { header: (n: string
   return diff === 0 ? ('ok' as const) : ('unauthorized' as const);
 }
 
-admin.post('/admin/sync-instruments', async (c) => {
+admin.post('/admin/refresh-directory', async (c) => {
   const outcome = authorize(c);
   if (outcome === 'disabled') return problem(c, 404, 'Not Found');
   if (outcome === 'unauthorized') return problem(c, 401, 'Unauthorized', 'Invalid admin token.');
 
-  const exchange = c.req.query('exchange') ?? 'US';
+  const exchange = c.req.query('exchange');
 
-  const report = await syncInstrumentUniverse(
+  const report = await refreshInstrumentDirectory(
     createProvider(c.env),
-    new D1InstrumentRepository(c.env.DB),
+    new KvInstrumentDirectory(c.env.CACHE),
     c.get('clock'),
-    exchange,
+    exchange ? [exchange] : undefined,
   );
 
   // 502 when the provider failed, so a monitoring check cannot read a failed
-  // sync as a successful one.
+  // refresh as a successful one.
   return c.json(report, report.failed ? 502 : 200);
 });

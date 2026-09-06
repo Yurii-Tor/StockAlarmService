@@ -108,10 +108,10 @@ export function TickerSearch({
       {results.length > 0 ? (
         <ul data-testid="search-results" className="divide-y divide-(--color-border-subtle) rounded-xl border border-(--color-border-subtle) overflow-hidden">
           {results.map((result) => (
-            <li key={result.instrumentId}>
+            <li key={result.instrumentRef}>
               <button
                 type="button"
-                data-testid={`result-${result.instrumentId}`}
+                data-testid={`result-${result.instrumentRef}`}
                 onClick={() => onSelect(result)}
                 className="flex w-full flex-col items-start gap-0.5 bg-(--color-surface-raised) px-4 py-3 text-left hover:bg-(--color-accent)/8 focus:bg-(--color-accent)/8 focus:outline-none"
               >
@@ -125,9 +125,9 @@ export function TickerSearch({
                       duplicate ticker
                     </span>
                   ) : null}
-                  {!result.isMonitorable ? (
+                  {!result.metadataKnown ? (
                     <span className="rounded bg-(--color-ink-muted)/15 px-1.5 py-0.5 text-[10px]">
-                      no price alerts
+                      venue unknown
                     </span>
                   ) : null}
                 </span>

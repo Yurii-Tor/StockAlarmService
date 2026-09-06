@@ -8,7 +8,7 @@ import type { Clock } from '../../domain/time/clock';
 import { toIsoInstant } from '../../domain/time/format';
 import { MarketDataUnavailable, type MarketDataProvider } from '../ports/market-data';
 import type { CachedQuote, CallBudget, QuoteCache } from '../ports/quote-cache';
-import type { StoredInstrument } from '../ports/instrument-repository';
+import type { ResolvedInstrument } from './search';
 
 /**
  * Quote retrieval (§B.2, §B.3).
@@ -24,7 +24,7 @@ import type { StoredInstrument } from '../ports/instrument-repository';
  */
 
 export interface QuoteView {
-  instrumentId: string;
+  instrumentRef: string;
   price: string | null;
   currency: string | null;
   /** ISO-8601 of the PROVIDER's as-of time. Null when unavailable. */
@@ -54,7 +54,7 @@ export const QUOTE_TTL_SECONDS = 60;
 export const PROVIDER_CALLS_PER_MINUTE = 50;
 
 function toView(
-  instrument: StoredInstrument,
+  instrument: ResolvedInstrument,
   cached: CachedQuote,
   now: number,
   fromCache: boolean,
@@ -67,7 +67,7 @@ function toView(
   });
 
   return {
-    instrumentId: instrument.id,
+    instrumentRef: instrument.ref,
     price: cached.price,
     // The quote endpoint does not return a currency, so it comes from the
     // instrument's own metadata rather than being guessed or left blank.
@@ -89,7 +89,7 @@ function toView(
 }
 
 function unavailableView(
-  instrument: StoredInstrument,
+  instrument: ResolvedInstrument,
   now: number,
   source: string,
 ): QuoteView {
@@ -97,7 +97,7 @@ function unavailableView(
   // retry. The instrument selection survives a provider outage.
   const result = computeFreshness({ quoteAsOf: null, hasPrice: false, delayMinutes: 0, now });
   return {
-    instrumentId: instrument.id,
+    instrumentRef: instrument.ref,
     price: null,
     currency: instrument.currency,
     quoteAsOf: null,
@@ -125,14 +125,14 @@ export interface QuoteDeps {
 
 export async function getQuote(
   deps: QuoteDeps,
-  instrument: StoredInstrument,
+  instrument: ResolvedInstrument,
   options: { forceRefresh?: boolean } = {},
 ): Promise<QuoteView> {
   const { provider, cache, clock, budget } = deps;
   const now = clock.now();
 
   if (!options.forceRefresh) {
-    const cached = await cache.get(instrument.id);
+    const cached = await cache.get(instrument.ref);
     // TTL is measured from OUR fetch time, not the provider's as-of time:
     // re-fetching a six-hour-old closing price every minute would spend
     // budget to learn nothing.
@@ -144,13 +144,13 @@ export async function getQuote(
   if (budget && !(await budget.tryConsume(provider.name, PROVIDER_CALLS_PER_MINUTE))) {
     // Over budget: serve a stale cached value if one exists rather than
     // hammering the provider into 429s that look like an outage.
-    const cached = await cache.get(instrument.id);
+    const cached = await cache.get(instrument.ref);
     if (cached) return toView(instrument, cached, now, true);
     return unavailableView(instrument, now, provider.name);
   }
 
   try {
-    const fetched = await provider.getQuote(instrument.providerInstrumentId);
+    const fetched = await provider.getQuote(instrument.symbol);
     const record: CachedQuote = {
       price: fetched.price,
       currency: fetched.currency ?? instrument.currency,
@@ -163,14 +163,14 @@ export async function getQuote(
       dayHigh: fetched.dayHigh,
       dayLow: fetched.dayLow,
     };
-    await cache.set(instrument.id, record, QUOTE_TTL_SECONDS);
+    await cache.set(instrument.ref, record, QUOTE_TTL_SECONDS);
     return toView(instrument, record, now, false);
   } catch (error) {
     if (!(error instanceof MarketDataUnavailable)) throw error;
 
     // Prefer a stale price clearly labelled stale over no price at all --
     // but never relabel it as current. That is the whole point of §B.2.
-    const cached = await cache.get(instrument.id);
+    const cached = await cache.get(instrument.ref);
     if (cached) return toView(instrument, cached, now, true);
     return unavailableView(instrument, now, provider.name);
   }

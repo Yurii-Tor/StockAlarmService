@@ -7,8 +7,13 @@ import {
 } from '../../worker/src/domain/instruments/freshness';
 import { exchangeNameForMic } from '../../worker/src/domain/instruments/exchanges';
 import { buildDraft, type UserDefaults } from '../../worker/src/app/instruments/draft';
-import { buildFtsQuery } from '../../worker/src/adapters/db/instrument-repository';
-import type { StoredInstrument } from '../../worker/src/app/ports/instrument-repository';
+import {
+  baseSymbol,
+  instrumentRef,
+  parseInstrumentRef,
+  type ResolvedInstrument,
+} from '../../worker/src/app/instruments/search';
+import { shardKeyForSymbol } from '../../worker/src/app/ports/instrument-directory';
 import type { QuoteView } from '../../worker/src/app/instruments/quotes';
 
 const NOW = 1_788_600_000_000;
@@ -127,42 +132,64 @@ describe('MIC to exchange name (OQ-14)', () => {
   });
 });
 
-describe('FTS query building', () => {
-  it('neutralises FTS5 operators in user input', () => {
-    // An unescaped quote or a bare `NOT` would be a syntax error the user
-    // cannot see or explain.
-    expect(buildFtsQuery('MSFT')).toBe('"MSFT"*');
-    expect(buildFtsQuery('micro soft')).toBe('"micro"* AND "soft"*');
-    expect(buildFtsQuery('a"b')).toBe('"a"* AND "b"*');
-    expect(buildFtsQuery('NOT (x)')).toBe('"NOT"* AND "x"*');
+describe('instrument references and venue suffixes', () => {
+  it('round-trips a reference that needs no stored row', () => {
+    // §G.2 names this `instrumentId`. There is no id until the user saves, so
+    // the reference is provider:symbol -- see docs/02-assumptions.md.
+    expect(instrumentRef('finnhub', 'MSFT')).toBe('finnhub:MSFT');
+    expect(parseInstrumentRef('finnhub:MSFT')).toEqual({ provider: 'finnhub', symbol: 'MSFT' });
   });
 
-  it('returns null for input with nothing searchable in it', () => {
-    expect(buildFtsQuery('   ')).toBeNull();
-    expect(buildFtsQuery('***')).toBeNull();
+  it('keeps symbols containing a colon intact', () => {
+    expect(parseInstrumentRef('finnhub:BRK:B')).toEqual({ provider: 'finnhub', symbol: 'BRK:B' });
+  });
+
+  it('rejects malformed references instead of guessing', () => {
+    expect(parseInstrumentRef('MSFT')).toBeNull();
+    expect(parseInstrumentRef(':MSFT')).toBeNull();
+    expect(parseInstrumentRef('finnhub:')).toBeNull();
+  });
+
+  it('derives the shared ticker from a venue suffix', () => {
+    // This is what makes §B.1 duplicate detection possible without a local
+    // index: providers suffix the venue, so VOD and VOD.L share a base.
+    expect(baseSymbol('VOD')).toBe('VOD');
+    expect(baseSymbol('VOD.L')).toBe('VOD');
+    expect(baseSymbol('vod.jo')).toBe('VOD');
+  });
+});
+
+describe('directory sharding', () => {
+  it('shards by leading character so a lookup reads one shard', () => {
+    expect(shardKeyForSymbol('MSFT')).toBe('M');
+    expect(shardKeyForSymbol('aapl')).toBe('A');
+    expect(shardKeyForSymbol('3M')).toBe('3');
+  });
+
+  it('buckets anything unusual together rather than creating stray shards', () => {
+    expect(shardKeyForSymbol('_ODD')).toBe('_');
+    expect(shardKeyForSymbol('')).toBe('_');
   });
 });
 
 describe('quick-add draft (§C.1, §C.2, §G.2)', () => {
-  const instrument: StoredInstrument = {
-    id: 'inst-msft',
+  const instrument: ResolvedInstrument = {
+    ref: 'fake:MSFT',
     provider: 'fake',
-    providerInstrumentId: 'MSFT',
     symbol: 'MSFT',
     displayName: 'Microsoft Corporation',
     assetType: 'stock',
-    exchange: null,
+    exchange: 'NASDAQ',
     mic: 'XNAS',
     currency: 'USD',
     country: 'US',
     isin: null,
     figi: 'BBG000BPH459',
     isMonitorable: true,
-    metadataUpdatedAt: NOW,
   };
 
   const quote: QuoteView = {
-    instrumentId: 'inst-msft',
+    instrumentRef: 'fake:MSFT',
     price: '480.15',
     currency: 'USD',
     quoteAsOf: '2026-09-05T12:35:40Z',

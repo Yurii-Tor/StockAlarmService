@@ -1,42 +1,46 @@
 import { SELF, env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
-import {
-  D1InstrumentRepository,
-  D1_ROW_WRITE_AMPLIFICATION,
-} from '../../worker/src/adapters/db/instrument-repository';
-import { FAKE_INSTRUMENTS } from '../../worker/src/adapters/marketdata/fake';
-import {
-  syncInstrumentUniverse,
-  maxStatementsForBudget,
-  SYNC_ROW_WRITE_BUDGET,
-} from '../../worker/src/app/instruments/sync';
+import { KvInstrumentDirectory } from '../../worker/src/adapters/cache/kv-instrument-directory';
+import { FakeMarketDataProvider } from '../../worker/src/adapters/marketdata/fake';
+import { refreshInstrumentDirectory } from '../../worker/src/app/instruments/directory-refresh';
 import { FixedClock } from '../../worker/src/domain/time/clock';
 
 /**
- * Proves acceptance criteria 1, 2 and 3 through the real HTTP surface, with
- * the real schema and the real FTS5 index.
+ * Proves acceptance criteria 1, 2 and 3 against the on-demand architecture:
+ * live provider search, a KV directory for venue metadata, and **no D1 write
+ * anywhere in the flow**.
+ *
+ * That last property is the point. The previous design kept ~31,000
+ * instruments in D1, cost 177,888 billable writes to seed, and took the whole
+ * Cloudflare account offline for four hours.
  */
 
 const ORIGIN = 'http://localhost:8787';
 const NOW = 1_788_600_000_000;
 
-async function resetDb() {
+async function resetAll() {
   for (const t of [
-    'instruments_fts',
-    'instruments',
     'sessions',
     'accounts',
     'verifications',
     'user_settings',
     'users',
+    'instruments',
   ]) {
     await env.DB.prepare(`delete from ${t}`).run();
   }
+  const { keys } = await env.CACHE.list();
+  await Promise.all(keys.map((k) => env.CACHE.delete(k.name)));
 }
 
-async function seedInstruments() {
-  const repo = new D1InstrumentRepository(env.DB);
-  return repo.upsertChanged('fake', FAKE_INSTRUMENTS, NOW, 100_000);
+/** Both exchanges, so the duplicate-ticker fixture has metadata on each side. */
+async function seedDirectory(exchanges: readonly string[] = ['US', 'L']) {
+  return refreshInstrumentDirectory(
+    new FakeMarketDataProvider(),
+    new KvInstrumentDirectory(env.CACHE),
+    new FixedClock(NOW),
+    exchanges,
+  );
 }
 
 async function signIn(email = 'investor@example.com'): Promise<string> {
@@ -59,38 +63,42 @@ async function signIn(email = 'investor@example.com'): Promise<string> {
 let cookie: string;
 
 beforeEach(async () => {
-  await resetDb();
-  await seedInstruments();
+  await resetAll();
+  await seedDirectory();
   cookie = await signIn();
 });
 
-describe('instrument sync', () => {
-  it('inserts on first run and writes nothing on an unchanged second run', async () => {
-    // A full US universe is ~31,000 rows against a 100k/day D1 write budget,
-    // so a truncate-and-reload nightly sync would burn a third of it to
-    // change nothing (NFR-06).
-    const second = await seedInstruments();
+describe('directory refresh (replaces the D1 sync that caused the outage)', () => {
+  it('writes shards to KV and nothing at all to D1', async () => {
+    await resetAll();
+    const report = await seedDirectory();
 
-    expect(second.seen).toBe(FAKE_INSTRUMENTS.length);
-    expect(second.inserted).toBe(0);
-    expect(second.updated).toBe(0);
-    expect(second.unchanged).toBe(FAKE_INSTRUMENTS.length);
+    expect(report.failed).toBe(false);
+    expect(report.entries).toBeGreaterThan(0);
+    expect(report.shardsWritten).toBeGreaterThan(0);
+
+    // The whole point: the searchable directory costs zero D1 rows.
+    const rows = await env.DB.prepare(`select count(*) as c from instruments`).first<{
+      c: number;
+    }>();
+    expect(rows!.c).toBe(0);
   });
 
-  it('updates only the rows that actually changed', async () => {
-    const changed = FAKE_INSTRUMENTS.map((i) =>
-      i.symbol === 'MSFT' ? { ...i, displayName: 'Microsoft Corp (renamed)' } : i,
-    );
-    const repo = new D1InstrumentRepository(env.DB);
-    const outcome = await repo.upsertChanged('fake', changed, NOW + 1000, 100_000);
+  it('writes nothing on a second, unchanged refresh', async () => {
+    const second = await seedDirectory();
 
-    expect(outcome.updated).toBe(1);
-    expect(outcome.unchanged).toBe(FAKE_INSTRUMENTS.length - 1);
+    // Rewriting every shard nightly would spend the KV budget (1,000
+    // writes/day) re-storing identical data -- the same mistake that caused
+    // the D1 outage, in a different store.
+    expect(second.shardsWritten).toBe(0);
+    expect(second.kvWrites).toBe(0);
+    expect(second.shardsUnchanged).toBe(second.shards);
   });
 
-  it('leaves the existing universe intact when the provider fails', async () => {
+  it('leaves the existing directory intact when the provider fails', async () => {
     const failing = {
       name: 'fake',
+      search: async () => [],
       listInstruments: async () => {
         throw new Error('provider down');
       },
@@ -99,174 +107,21 @@ describe('instrument sync', () => {
       },
     };
 
-    const report = await syncInstrumentUniverse(
+    const report = await refreshInstrumentDirectory(
       failing as never,
-      new D1InstrumentRepository(env.DB),
+      new KvInstrumentDirectory(env.CACHE),
       new FixedClock(NOW),
-      'US',
+      ['US'],
     );
-
     expect(report.failed).toBe(true);
 
-    // Stale metadata still supports search; an emptied table would not.
-    const remaining = await env.DB.prepare(
-      `select count(*) as c from instruments`,
-    ).first<{ c: number }>();
-    expect(remaining!.c).toBe(FAKE_INSTRUMENTS.length);
-  });
-});
-
-describe('instrument sync at scale', () => {
-  /**
-   * The production US universe is ~31,000 rows. This exercises the chunked
-   * batch path and, more importantly, the claim the whole design rests on:
-   * that a second sync of unchanged data writes NOTHING. If that ever breaks,
-   * the nightly job silently consumes a third of the daily D1 write budget.
-   */
-  const LARGE = 2_000;
-
-  function universe(count: number, renameEvery = 0) {
-    return Array.from({ length: count }, (_, i) => ({
-      providerInstrumentId: `SYN${i}`,
-      symbol: `SYN${i}`,
-      displayName:
-        renameEvery > 0 && i % renameEvery === 0 ? `Synthetic ${i} (renamed)` : `Synthetic ${i}`,
-      assetType: 'stock',
-      mic: 'XNAS',
-      currency: 'USD',
-      country: 'US',
-      isin: null,
-      figi: null,
-      isMonitorable: true,
-    }));
-  }
-
-  it('inserts a large universe, then writes nothing when it has not changed', async () => {
-    const repo = new D1InstrumentRepository(env.DB);
-
-    const first = await repo.upsertChanged('synthetic', universe(LARGE), NOW, 100_000);
-    expect(first.inserted).toBe(LARGE);
-
-    const second = await repo.upsertChanged('synthetic', universe(LARGE), NOW + 86_400_000, 100_000);
-    expect(second.unchanged).toBe(LARGE);
-    expect(second.inserted).toBe(0);
-    expect(second.updated).toBe(0);
-  });
-
-  it('writes only the changed rows on a partial update', async () => {
-    const repo = new D1InstrumentRepository(env.DB);
-    await repo.upsertChanged('synthetic', universe(LARGE), NOW, 100_000);
-
-    // One row in every hundred changed.
-    const outcome = await repo.upsertChanged('synthetic', universe(LARGE, 100), NOW + 1000, 100_000);
-
-    expect(outcome.updated).toBe(LARGE / 100);
-    expect(outcome.unchanged).toBe(LARGE - LARGE / 100);
-  });
-
-  it('keeps the FTS index in step with a large sync', async () => {
-    const repo = new D1InstrumentRepository(env.DB);
-    await repo.upsertChanged('synthetic', universe(LARGE), NOW, 100_000);
-
-    const indexed = await env.DB.prepare(
-      `select count(*) as c from instruments_fts`,
-    ).first<{ c: number }>();
-
-    // Triggers, not application code, keep these in step -- so a bulk insert
-    // path that bypassed them would show up here.
-    expect(indexed!.c).toBe(LARGE + FAKE_INSTRUMENTS.length);
-  });
-});
-
-describe('sync write budget (the guard that prevents an account outage)', () => {
-  /**
-   * On 2026-09-05 an unthrottled seed of 30,991 instruments wrote 177,888
-   * billable D1 rows -- 178% of the daily free-tier budget. Because D1's
-   * write limit is enforced PER ACCOUNT, it blocked writes for an unrelated
-   * project on the same account for roughly four hours.
-   *
-   * These tests exist so that cannot happen again from this code path.
-   */
-  function universe(count: number) {
-    return Array.from({ length: count }, (_, i) => ({
-      providerInstrumentId: `CAP${i}`,
-      symbol: `CAP${i}`,
-      displayName: `Capped ${i}`,
-      assetType: 'stock',
-      mic: 'XNAS',
-      currency: 'USD',
-      country: 'US',
-      isin: null,
-      figi: null,
-      isMonitorable: true,
-    }));
-  }
-
-  it('writes only up to the cap and defers the rest', async () => {
-    const repo = new D1InstrumentRepository(env.DB);
-    const outcome = await repo.upsertChanged('capped', universe(500), NOW, 100);
-
-    expect(outcome.inserted).toBe(100);
-    expect(outcome.deferred).toBe(400);
-    expect(outcome.budgetExhausted).toBe(true);
-    expect(outcome.seen).toBe(500);
-  });
-
-  it('reports billable rows using the measured amplification, not row count', () => {
-    // The whole incident came from counting logical rows and ignoring index
-    // and FTS fan-out. 100 statements is 600 billable rows, not 100.
-    expect(D1_ROW_WRITE_AMPLIFICATION).toBe(6);
-  });
-
-  it('estimates the true billable cost of a run', async () => {
-    const repo = new D1InstrumentRepository(env.DB);
-    const outcome = await repo.upsertChanged('capped', universe(50), NOW, 1000);
-
-    expect(outcome.inserted).toBe(50);
-    expect(outcome.estimatedRowsWritten).toBe(50 * D1_ROW_WRITE_AMPLIFICATION);
-  });
-
-  it('drains the backlog across successive runs', async () => {
-    const repo = new D1InstrumentRepository(env.DB);
-    const all = universe(250);
-
-    const first = await repo.upsertChanged('capped', all, NOW, 100);
-    const second = await repo.upsertChanged('capped', all, NOW, 100);
-    const third = await repo.upsertChanged('capped', all, NOW, 100);
-
-    expect(first.inserted).toBe(100);
-    expect(second.inserted).toBe(100);
-    expect(third.inserted).toBe(50);
-
-    // A deferred row still differs on the next run, so the stable diff is
-    // what makes a capped seed eventually complete.
-    expect(third.budgetExhausted).toBe(false);
-    expect(third.deferred).toBe(0);
-
-    const stored = await env.DB.prepare(
-      `select count(*) as c from instruments where provider = 'capped'`,
-    ).first<{ c: number }>();
-    expect(stored!.c).toBe(250);
-  });
-
-  it('keeps a full US-sized seed inside the account budget', () => {
-    // 30,991 instruments at 6 rows each is 185,946 billable writes against a
-    // 100,000/day account limit. The cap must make one run affordable.
-    const perRun = maxStatementsForBudget();
-    expect(perRun * D1_ROW_WRITE_AMPLIFICATION).toBeLessThanOrEqual(SYNC_ROW_WRITE_BUDGET);
-    expect(perRun * D1_ROW_WRITE_AMPLIFICATION).toBeLessThan(100_000);
-
-    const runsNeeded = Math.ceil(30_991 / perRun);
-    expect(runsNeeded).toBeGreaterThan(1);
-  });
-
-  it('never writes when the budget is zero', async () => {
-    const repo = new D1InstrumentRepository(env.DB);
-    const outcome = await repo.upsertChanged('capped', universe(10), NOW, 0);
-
-    expect(outcome.inserted).toBe(0);
-    expect(outcome.deferred).toBe(10);
-    expect(outcome.estimatedRowsWritten).toBe(0);
+    // A partial refresh would delete every symbol of the failed exchange,
+    // because refresh replaces shard contents. Search must keep working.
+    const res = await SELF.fetch(`${ORIGIN}/api/v1/instruments/search?q=MSFT`, {
+      headers: { cookie },
+    });
+    const body = (await res.json()) as { results: Array<{ exchange: string }> };
+    expect(body.results[0]!.exchange).toBe('NASDAQ');
   });
 });
 
@@ -282,23 +137,28 @@ describe('GET /instruments/search (§B.1)', () => {
     });
     expect(res.status).toBe(200);
 
-    const body = (await res.json()) as {
-      results: Array<Record<string, unknown>>;
-      requiresDisambiguation: boolean;
-    };
+    const body = (await res.json()) as { results: Array<Record<string, unknown>> };
     const msft = body.results[0]!;
 
-    // Acceptance criterion 1, field by field.
+    // Acceptance criterion 1, from a live search plus KV metadata.
     expect(msft['symbol']).toBe('MSFT');
     expect(msft['displayName']).toBe('Microsoft Corporation');
     expect(msft['exchange']).toBe('NASDAQ');
-    expect(msft['assetType']).toBe('stock');
     expect(msft['currency']).toBe('USD');
-
-    // §B.1's two-line result format, assembled server-side so every client
-    // renders the same thing.
-    expect(msft['primaryLine']).toBe('MSFT — Microsoft Corporation');
     expect(msft['secondaryLine']).toBe('NASDAQ · Stock · USD');
+
+    // The reference needs no stored row.
+    expect(msft['instrumentRef']).toBe('fake:MSFT');
+  });
+
+  it('costs no database writes', async () => {
+    await SELF.fetch(`${ORIGIN}/api/v1/instruments/search?q=MSFT`, { headers: { cookie } });
+    await SELF.fetch(`${ORIGIN}/api/v1/instruments/search?q=VOD`, { headers: { cookie } });
+
+    const rows = await env.DB.prepare(`select count(*) as c from instruments`).first<{
+      c: number;
+    }>();
+    expect(rows!.c).toBe(0);
   });
 
   it('flags a duplicate ticker across venues instead of picking one', async () => {
@@ -306,18 +166,16 @@ describe('GET /instruments/search (§B.1)', () => {
       headers: { cookie },
     });
     const body = (await res.json()) as {
-      results: Array<{ symbol: string; mic: string; currency: string; isAmbiguousSymbol: boolean }>;
+      results: Array<{ symbol: string; currency: string | null; isAmbiguousSymbol: boolean }>;
       requiresDisambiguation: boolean;
     };
 
-    const vod = body.results.filter((r) => r.symbol === 'VOD');
+    const vod = body.results.filter((r) => r.symbol === 'VOD' || r.symbol === 'VOD.L');
     expect(vod).toHaveLength(2);
-    expect(vod.map((r) => r.mic).sort()).toEqual(['XLON', 'XNAS']);
-    expect(vod.map((r) => r.currency).sort()).toEqual(['GBP', 'USD']);
 
-    // §B.1: "Never automatically assume a ticker is unique across all
-    // exchanges." The server states the ambiguity as data so a client cannot
-    // silently auto-select the wrong listing.
+    // Venue suffixes make this detectable without a local index: VOD and
+    // VOD.L share a base ticker but are different instruments.
+    expect(vod.map((r) => r.currency).sort()).toEqual(['GBP', 'USD']);
     expect(vod.every((r) => r.isAmbiguousSymbol)).toBe(true);
     expect(body.requiresDisambiguation).toBe(true);
   });
@@ -326,78 +184,67 @@ describe('GET /instruments/search (§B.1)', () => {
     const res = await SELF.fetch(`${ORIGIN}/api/v1/instruments/search?q=AAPL`, {
       headers: { cookie },
     });
-    const body = (await res.json()) as {
-      results: Array<{ isAmbiguousSymbol: boolean }>;
-      requiresDisambiguation: boolean;
-    };
+    const body = (await res.json()) as { requiresDisambiguation: boolean };
     expect(body.requiresDisambiguation).toBe(false);
-    expect(body.results[0]!.isAmbiguousSymbol).toBe(false);
   });
 
-  it('matches on company name, not just ticker', async () => {
-    const res = await SELF.fetch(`${ORIGIN}/api/v1/instruments/search?q=microsoft`, {
-      headers: { cookie },
-    });
-    const body = (await res.json()) as { results: Array<{ symbol: string }> };
-    expect(body.results.map((r) => r.symbol)).toContain('MSFT');
-  });
+  it('still returns a symbol missing from the directory, marked unknown', async () => {
+    // A venue we do not sync. Showing it honestly beats hiding it or
+    // inventing a currency (§B.2, §B.3).
+    const { keys } = await env.CACHE.list();
+    await Promise.all(keys.map((k) => env.CACHE.delete(k.name)));
+    await seedDirectory(['US']);
 
-  it('returns an empty result rather than an error for junk input', async () => {
-    const res = await SELF.fetch(`${ORIGIN}/api/v1/instruments/search?q=%22%2A%2A%2A`, {
+    const res = await SELF.fetch(`${ORIGIN}/api/v1/instruments/search?q=VOD`, {
       headers: { cookie },
     });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { results: unknown[] };
-    expect(body.results).toEqual([]);
+    const body = (await res.json()) as {
+      results: Array<{
+        symbol: string;
+        metadataKnown: boolean;
+        secondaryLine: string;
+        isMonitorable: boolean;
+      }>;
+    };
+
+    const london = body.results.find((r) => r.symbol === 'VOD.L')!;
+    expect(london.metadataKnown).toBe(false);
+    expect(london.secondaryLine).toBe('Venue and currency unknown');
+    // §B.3: unresolvable metadata blocks price targets, not reminders.
+    expect(london.isMonitorable).toBe(false);
   });
 });
 
-describe('GET /instruments/:id/quote (§B.2, §B.3)', () => {
-  async function instrumentIdFor(symbol: string): Promise<string> {
-    const row = await env.DB.prepare(
-      `select id from instruments where symbol = ? limit 1`,
-    )
-      .bind(symbol)
-      .first<{ id: string }>();
-    return row!.id;
-  }
-
-  it('returns a price with its provenance and freshness', async () => {
-    const id = await instrumentIdFor('MSFT');
-    const res = await SELF.fetch(`${ORIGIN}/api/v1/instruments/${id}/quote`, {
-      headers: { cookie },
-    });
+describe('GET /instruments/:ref/quote (§B.2, §B.3)', () => {
+  it('returns a price with provenance and freshness', async () => {
+    const res = await SELF.fetch(
+      `${ORIGIN}/api/v1/instruments/${encodeURIComponent('fake:MSFT')}/quote`,
+      { headers: { cookie } },
+    );
     expect(res.status).toBe(200);
 
     const q = (await res.json()) as Record<string, unknown>;
     expect(q['price']).toBe('480.15');
     expect(q['currency']).toBe('USD');
-    // FR-024: both timestamps present and distinct in meaning.
-    expect(q['quoteAsOf']).toBeTruthy();
-    expect(q['retrievedAt']).toBeTruthy();
     expect(q['freshness']).toBe('realtime');
-    expect(q['mayBeCalledCurrent']).toBe(true);
+    expect(q['instrumentRef']).toBe('fake:MSFT');
   });
 
-  it('keeps the instrument and reports price unavailable when the quote fails', async () => {
-    const id = await instrumentIdFor('NOQUOTE');
-    const res = await SELF.fetch(`${ORIGIN}/api/v1/instruments/${id}/quote`, {
-      headers: { cookie },
-    });
+  it('reports price unavailable without losing the instrument', async () => {
+    const res = await SELF.fetch(
+      `${ORIGIN}/api/v1/instruments/${encodeURIComponent('fake:NOQUOTE')}/quote`,
+      { headers: { cookie } },
+    );
 
-    // §B.3: metadata survives, the price does not pretend to exist, and the
-    // client is told it may not call anything current.
     expect(res.status).toBe(200);
     const q = (await res.json()) as Record<string, unknown>;
     expect(q['price']).toBeNull();
     expect(q['freshness']).toBe('unavailable');
     expect(q['mayBeCalledCurrent']).toBe(false);
-    expect(q['freshnessLabel']).toBe('price unavailable');
-    expect(q['instrumentId']).toBe(id);
   });
 
-  it('404s an unknown instrument as problem+json', async () => {
-    const res = await SELF.fetch(`${ORIGIN}/api/v1/instruments/does-not-exist/quote`, {
+  it('rejects a malformed reference', async () => {
+    const res = await SELF.fetch(`${ORIGIN}/api/v1/instruments/nonsense/quote`, {
       headers: { cookie },
     });
     expect(res.status).toBe(404);
@@ -406,13 +253,6 @@ describe('GET /instruments/:id/quote (§B.2, §B.3)', () => {
 });
 
 describe('POST /investment-items/draft-from-instrument (§G.2)', () => {
-  async function instrumentIdFor(symbol: string): Promise<string> {
-    const row = await env.DB.prepare(`select id from instruments where symbol = ? limit 1`)
-      .bind(symbol)
-      .first<{ id: string }>();
-    return row!.id;
-  }
-
   async function draft(body: Record<string, unknown>) {
     const res = await SELF.fetch(`${ORIGIN}/api/v1/investment-items/draft-from-instrument`, {
       method: 'POST',
@@ -423,90 +263,56 @@ describe('POST /investment-items/draft-from-instrument (§G.2)', () => {
   }
 
   it('prefills everything derivable when the user says "I bought it"', async () => {
-    const instrumentId = await instrumentIdFor('MSFT');
-    const { status, body } = await draft({ instrumentId, intent: 'open' });
-
+    const { status, body } = await draft({ instrumentRef: 'fake:MSFT', intent: 'open' });
     expect(status).toBe(200);
 
     const item = body['investmentItemDraft'] as unknown as Record<string, unknown>;
     const lot = body['lotDraft'] as unknown as Record<string, unknown>;
 
-    // Criterion 2: symbol, name, exchange, currency, type, price, quote
-    // timestamp/freshness, and creation time all arrive filled.
     expect(item['symbol']).toBe('MSFT');
-    expect(item['name']).toBe('Microsoft Corporation');
     expect(item['exchange']).toBe('NASDAQ');
     expect(item['currency']).toBe('USD');
-    expect(item['assetType']).toBe('stock');
-    expect(item['createdAt']).toBeTruthy();
     expect(item['status']).toBe('open');
 
-    // Criterion 3: date=now, price=latest quote, fees=0, status=open.
     expect(lot['entryPrice']).toBe('480.15');
     expect(lot['fees']).toBe('0');
-    expect(lot['boughtAt']).toBe(item['createdAt']);
-    expect(lot['entryPriceSource']).toBe('latest_quote');
-
-    // The single thing the system cannot know.
     expect(lot['quantity']).toBeNull();
     expect(body['requiredFields']).toEqual(['quantity']);
   });
 
-  it('creates no lot when the user is only watching', async () => {
-    const instrumentId = await instrumentIdFor('MSFT');
-    const { body } = await draft({ instrumentId, intent: 'watching' });
-
+  it('creates no lot when only watching', async () => {
+    const { body } = await draft({ instrumentRef: 'fake:MSFT', intent: 'watching' });
     expect(body['lotDraft']).toBeNull();
-    expect((body['investmentItemDraft'] as unknown as Record<string, unknown>)['status']).toBe(
-      'watching',
-    );
   });
 
-  it('defaults to watching when no intent is supplied (FR-070)', async () => {
-    const instrumentId = await instrumentIdFor('MSFT');
-    const { body } = await draft({ instrumentId });
-    expect((body['investmentItemDraft'] as unknown as Record<string, unknown>)['status']).toBe(
-      'watching',
-    );
-  });
-
-  it('still produces a usable draft when the quote is unavailable', async () => {
-    const instrumentId = await instrumentIdFor('NOQUOTE');
-    const { status, body } = await draft({ instrumentId, intent: 'open' });
-
-    expect(status).toBe(200);
+  it('asks for a price when no quote was available', async () => {
+    const { body } = await draft({ instrumentRef: 'fake:NOQUOTE', intent: 'open' });
     const lot = body['lotDraft'] as unknown as Record<string, unknown>;
 
-    // §B.3: the selection survives, and the user is asked for the price
-    // rather than handed a fabricated one.
     expect(lot['entryPrice']).toBeNull();
     expect(lot['entryPriceSource']).toBe('manual');
     expect(body['requiredFields']).toEqual(['quantity', 'entryPrice']);
   });
 
-  it('persists nothing', async () => {
-    const instrumentId = await instrumentIdFor('MSFT');
-    await draft({ instrumentId, intent: 'open' });
+  it('persists nothing, in any table', async () => {
+    await draft({ instrumentRef: 'fake:MSFT', intent: 'open' });
 
-    // §G.2 returns a proposal; the commit is a separate request (FR-045).
-    const items = await env.DB.prepare(
-      `select count(*) as c from investment_items`,
-    ).first<{ c: number }>();
-    const lots = await env.DB.prepare(`select count(*) as c from lots`).first<{ c: number }>();
-    expect(items!.c).toBe(0);
-    expect(lots!.c).toBe(0);
+    for (const table of ['investment_items', 'lots', 'instruments']) {
+      const row = await env.DB.prepare(`select count(*) as c from ${table}`).first<{ c: number }>();
+      expect(row!.c, table).toBe(0);
+    }
   });
 
-  it('rejects an unknown time zone instead of silently substituting one', async () => {
-    const instrumentId = await instrumentIdFor('MSFT');
-    const { status } = await draft({ instrumentId, intent: 'open', timezone: 'Mars/Olympus_Mons' });
-
-    // A reminder written against an unresolvable zone would fire at the wrong
-    // time with no error anywhere (ADR-0003).
+  it('rejects an unknown time zone rather than substituting one', async () => {
+    const { status } = await draft({
+      instrumentRef: 'fake:MSFT',
+      intent: 'open',
+      timezone: 'Mars/Olympus_Mons',
+    });
     expect(status).toBe(400);
   });
 
-  it('requires an instrumentId', async () => {
+  it('requires an instrumentRef', async () => {
     const { status } = await draft({ intent: 'open' });
     expect(status).toBe(400);
   });

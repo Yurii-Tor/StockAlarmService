@@ -66,9 +66,11 @@ Full D1 schema (23 tables + FTS5), instrument search over a synced universe, quo
 four-state freshness model, and the prefilled quick-add draft API. Magic-link and Google
 sign-in both work in production.
 
-Verified against live data: a real sync pulls **30,991 US instruments in ~21 s**, and
-searching `MSFT` returns `MSFT — MICROSOFT CORP` / `NASDAQ · Stock · USD` — acceptance
-criterion 1, end to end.
+Search is live against the market-data provider, enriched from an instrument directory
+kept in KV. Verified in production: 30,991 US symbols populate the directory in **26 KV
+writes and 8 seconds**, and a second refresh writes **nothing**. Searching `MSFT` returns
+`NASDAQ · Stock · USD` — acceptance criterion 1, with **zero database writes** anywhere in
+the search or draft flow.
 
 Cron triggers, queues and the dispatcher Durable Object are bound; the nightly instrument
 sync is live, and the dispatch and delivery handlers arrive in Phases 5 and 7.
