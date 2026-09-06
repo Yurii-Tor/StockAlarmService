@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { resetDatabase, seedDirectory, signIn } from './helpers';
+import { resetDatabase, seedDirectory, signIn, uniqueEmail } from './helpers';
 
 /**
  * Acceptance criterion 4: an item saves with no review date and no push.
@@ -11,10 +11,15 @@ import { resetDatabase, seedDirectory, signIn } from './helpers';
  * actually experiences.
  */
 test.describe('AC-04: saving needs no reminder', () => {
-  test.beforeEach(async ({ page, baseURL }) => {
+  test.beforeAll(async ({ baseURL }) => {
+    // Once per file: the reset and the directory refresh are both idempotent,
+    // and per-user scoping keeps tests from seeing each other's items.
     resetDatabase();
     await seedDirectory(baseURL!);
-    await signIn(page, `ac04-${Date.now()}@example.com`, baseURL!);
+  });
+
+  test.beforeEach(async ({ page, baseURL }) => {
+    await signIn(page, uniqueEmail('ac04'), baseURL!);
   });
 
   test('saves a watchlist item without ever mentioning a reminder', async ({ page }) => {

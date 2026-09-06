@@ -17,7 +17,7 @@ import { defineConfig, devices } from '@playwright/test';
  */
 
 const PORT = 4321;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -41,7 +41,11 @@ export default defineConfig({
   webServer: {
     // Builds the SPA first: wrangler serves web/dist, so a stale bundle would
     // silently test the previous UI.
-    command: `npm run build && npx wrangler dev --port ${PORT} --local --ip 127.0.0.1`,
+    // Uses the generated dev config, which has `routes` removed so wrangler
+    // stops substituting the production host for the one the browser is on.
+    command:
+      `npm run build && node scripts/dev-config.mjs && ` +
+      `npx wrangler dev --config .wrangler.dev.json --port ${PORT} --local --ip 127.0.0.1`,
     url: `${BASE_URL}/api/v1/health/live`,
     reuseExistingServer: !process.env['CI'],
     // workerd cold start plus the Vite build.

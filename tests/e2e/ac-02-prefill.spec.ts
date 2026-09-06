@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { resetDatabase, seedDirectory, signIn } from './helpers';
+import { resetDatabase, seedDirectory, signIn, uniqueEmail } from './helpers';
 
 /**
  * Acceptance criterion 2, plus §B.2's absolute rule about the word "current".
@@ -10,10 +10,15 @@ import { resetDatabase, seedDirectory, signIn } from './helpers';
  * while search showed it title-cased.
  */
 test.describe('AC-02: selection prefills the draft', () => {
-  test.beforeEach(async ({ page, baseURL }) => {
+  test.beforeAll(async ({ baseURL }) => {
+    // Once per file: the reset and the directory refresh are both idempotent,
+    // and per-user scoping keeps tests from seeing each other's items.
     resetDatabase();
     await seedDirectory(baseURL!);
-    await signIn(page, `ac02-${Date.now()}@example.com`, baseURL!);
+  });
+
+  test.beforeEach(async ({ page, baseURL }) => {
+    await signIn(page, uniqueEmail('ac02'), baseURL!);
     await page.goto('/add');
     await page.getByTestId('ticker-search').fill('MSFT');
     await page.getByTestId('search-results').getByRole('button').first().click();
