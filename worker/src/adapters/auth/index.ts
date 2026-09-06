@@ -55,6 +55,8 @@ export function createAuth(db: Database, env: AuthEnv, mailer: Mailer) {
   return betterAuth({
     baseURL,
     basePath: '/api/v1/auth',
+
+    trustedOrigins: [baseURL],
     secret: env.BETTER_AUTH_SECRET ?? 'dev-only-insecure-secret-do-not-deploy',
 
     database: drizzleAdapter(db, {
