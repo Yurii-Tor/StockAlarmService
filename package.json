@@ -23,12 +23,14 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply stockalarm --local",
     "db:migrate:remote": "wrangler d1 migrations apply stockalarm --remote",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "test:e2e:ui": "playwright test --ui"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20260903.1",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^26.4.1",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.9.1",
