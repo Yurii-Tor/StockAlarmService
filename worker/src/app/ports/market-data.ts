@@ -57,8 +57,29 @@ export class MarketDataUnavailable extends Error {
   }
 }
 
+/**
+ * A search hit straight from the provider.
+ *
+ * Deliberately thin: provider search endpoints return no exchange, MIC or
+ * currency. Those come from the instrument directory, keyed by symbol.
+ */
+export interface ProviderSearchHit {
+  symbol: string;
+  displayName: string;
+  assetType: string;
+}
+
 export interface MarketDataProvider {
   readonly name: string;
+
+  /**
+   * Live symbol search.
+   *
+   * Costs one provider call and zero database writes. The results are not
+   * sufficient on their own to satisfy acceptance criterion 1 -- they carry
+   * no venue or currency -- so callers enrich them from the directory.
+   */
+  search(query: string): Promise<ProviderSearchHit[]>;
 
   /**
    * The full instrument universe for one venue, used by the nightly sync.

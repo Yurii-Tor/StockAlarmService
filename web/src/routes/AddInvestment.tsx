@@ -16,7 +16,7 @@ import type { DraftResponse, SearchResult } from '../api/types';
 export function AddInvestment() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-  const instrumentId = params.get('instrumentId');
+  const instrumentRef = params.get('ref');
 
   const [intent, setIntent] = useState<'watching' | 'open'>('watching');
   const [draft, setDraft] = useState<DraftResponse | null>(null);
@@ -25,13 +25,13 @@ export function AddInvestment() {
   const [error, setError] = useState<string | null>(null);
 
   const loadDraft = useCallback(
-    async (id: string, nextIntent: 'watching' | 'open') => {
+    async (ref: string, nextIntent: 'watching' | 'open') => {
       setLoading(true);
       setError(null);
       try {
         setDraft(
           await api.draftFromInstrument({
-            instrumentId: id,
+            instrumentRef: ref,
             intent: nextIntent,
             // The browser knows the device zone; the server owns the account
             // default. Sending it means a draft created while travelling
@@ -50,21 +50,21 @@ export function AddInvestment() {
   );
 
   useEffect(() => {
-    if (instrumentId) void loadDraft(instrumentId, intent);
-  }, [instrumentId, intent, loadDraft]);
+    if (instrumentRef) void loadDraft(instrumentRef, intent);
+  }, [instrumentRef, intent, loadDraft]);
 
   function select(result: SearchResult) {
     // Navigation carries the instrument id, so a duplicate ticker resolves to
     // one specific listing rather than a symbol that could mean either (§B.1).
-    setParams({ instrumentId: result.instrumentId });
+    setParams({ ref: result.instrumentRef });
   }
 
   async function refreshQuote() {
-    if (!instrumentId) return;
+    if (!instrumentRef) return;
     setRefreshing(true);
     try {
-      await api.quote(instrumentId, true);
-      await loadDraft(instrumentId, intent);
+      await api.quote(instrumentRef, true);
+      await loadDraft(instrumentRef, intent);
     } finally {
       setRefreshing(false);
     }
@@ -75,7 +75,7 @@ export function AddInvestment() {
       <header className="mb-6 flex items-center gap-3">
         <button
           type="button"
-          onClick={() => (instrumentId ? setParams({}) : navigate('/'))}
+          onClick={() => (instrumentRef ? setParams({}) : navigate('/'))}
           className="text-sm text-(--color-ink-muted)"
         >
           ← Back
@@ -83,7 +83,7 @@ export function AddInvestment() {
         <h1 className="text-lg font-semibold">Add an investment</h1>
       </header>
 
-      {!instrumentId ? (
+      {!instrumentRef ? (
         <TickerSearch onSelect={select} autoFocus />
       ) : loading ? (
         <p className="text-sm text-(--color-ink-muted)">Loading instrument…</p>

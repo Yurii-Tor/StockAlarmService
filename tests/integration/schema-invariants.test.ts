@@ -322,31 +322,23 @@ describe('instruments', () => {
     expect(results.map((r) => r.mic)).toEqual(['XFRA', 'XNAS']);
   });
 
-  it('indexes instruments for full-text search and keeps the index in sync', async () => {
+  it('needs no full-text index, because search no longer runs here', async () => {
     await insertInstrument('i-us', 'MSFT', 'Microsoft Corporation', 'XNAS');
 
-    const found = await env.DB.prepare(
-      `select instrument_id from instruments_fts where instruments_fts match ?`,
-    )
-      .bind('micro*')
-      .first<{ instrument_id: string }>();
-    expect(found?.instrument_id).toBe('i-us');
-
-    await env.DB.prepare(
-      `update instruments set display_name = 'Renamed Holdings' where id = 'i-us'`,
-    ).run();
-    const afterRename = await env.DB.prepare(
-      `select count(*) as c from instruments_fts where instruments_fts match ?`,
-    )
-      .bind('micro*')
-      .first<{ c: number }>();
-    expect(afterRename!.c).toBe(0);
-
-    await env.DB.prepare(`delete from instruments where id = 'i-us'`).run();
-    const afterDelete = await env.DB.prepare(
-      `select count(*) as c from instruments_fts`,
+    // Migration 0002 dropped instruments_fts and its triggers. Each index on
+    // this table multiplies the billable write cost of saving an instrument,
+    // and the FTS shadow writes were 2 of the 6 that made the original seed
+    // cost 178% of the daily budget.
+    const fts = await env.DB.prepare(
+      `select count(*) as c from sqlite_master where name = 'instruments_fts'`,
     ).first<{ c: number }>();
-    expect(afterDelete!.c).toBe(0);
+    expect(fts!.c).toBe(0);
+
+    const indexes = await env.DB.prepare(
+      `select count(*) as c from sqlite_master
+       where type = 'index' and tbl_name = 'instruments' and name like 'ix_%'`,
+    ).first<{ c: number }>();
+    expect(indexes!.c).toBe(0);
   });
 });
 

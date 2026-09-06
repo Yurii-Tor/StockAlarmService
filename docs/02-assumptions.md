@@ -46,7 +46,10 @@ These fill the hole left by the missing base specification. Each is inferred fro
 | ASM-025 | Reminders store **wall-clock local time plus IANA zone**, not only a UTC instant. | Otherwise a 09:00 reminder set in September fires at 08:00 in December | Proposed |
 | ASM-026 | Zero-channel price targets are stored as **passive, clearly marked**, behind a confirmation. | §D.3 explicitly permits either this or forcing in-app. One had to be chosen | Proposed — **confirm** |
 | ASM-027 | The effective-delivery explanation (§E.2) is computed **server-side** via a preview endpoint. | Two implementations of the resolution rules will drift, and the one the user reads would not be the one that runs | Proposed |
-| ASM-028 | Quote caching and provider-call accounting live in **KV, not D1**. | Protects the 100k/day D1 row-write budget. Only genuine domain events consume it | Proposed |
+| ASM-028 | Quote caching, provider-call accounting **and the searchable instrument directory** live in **KV, not D1**. | Protects the 100k/day D1 row-write budget. Only genuine domain events consume it | Confirmed |
+| ASM-032 | **D1 holds only instruments the user actually saved.** The searchable universe (~31,000 symbols) lives in KV, sharded by leading symbol character. | Storing the universe in D1 cost 177,888 billable writes and took the account offline, to serve a user who adds perhaps 10-50 instruments a year — roughly 600x more data than the product needs. | **Confirmed by incident** |
+| ASM-033 | **Search is live against the provider**, enriched from the KV directory; the provider's search endpoint alone cannot satisfy criterion 1 because it returns no venue or currency. | Costs one provider call and a few KV reads per search, and zero writes anywhere. Trade-off: search now depends on the provider being reachable, where a local index did not. | Confirmed |
+| ASM-034 | An instrument is referenced as **`provider:symbol`** (`finnhub:MSFT`), not by a stored row id. | §G.2 specifies `instrumentId`, but no row exists until the user saves. Deviation recorded here rather than faked with a synthetic id. | **Deviation from §G.2** |
 | ASM-030 | **D1 bills index and FTS shadow writes as rows written.** One instrument insert costs **6** billable rows, not 1 (1 table + 3 index entries + ~2 FTS5). Every row-write estimate must be multiplied by index count plus FTS fan-out. | Getting this wrong caused a real outage on 2026-09-05 — see §E. Any new index on a hot-write table raises the multiplier. | **Confirmed by measurement** |
 | ASM-031 | **The D1 write limit is enforced per ACCOUNT, not per database.** This project shares one 100k/day budget with every other Worker and database on the account. | A bulk job here can take unrelated projects offline, and did. Bulk writes must be self-capping rather than trusting the job to be small. | **Confirmed by incident** |
 | ASM-029 | Delivery is **at-least-once**, bounded by a pre-incremented attempt counter. Exactly-once is not attempted. | Honesty about a real limit; documented rather than hidden | Proposed |
@@ -162,3 +165,48 @@ inherits production's per-minute cron — 1,440 invocations a day and a
 competing claim on the same shared write budget, for an environment nobody is
 testing. Giving the staging environment an empty `triggers.crons` is a
 one-line change there.
+
+
+## G. Architecture change: the directory moves to KV (2026-09-06)
+
+The fix in §F capped the damage. This removes the cause.
+
+**The observation that drove it**, from the user: the product only ever needs
+the *one* ticker being added. Writing 31,000 rows to support that is absurd on
+its face, and the incremental diff — however correct — was solving the wrong
+problem.
+
+| | Before | After |
+|---|---|---|
+| D1 writes to make search work | **185,946** | **0** |
+| Store for the searchable universe | D1, 31k rows + FTS5 | KV, 26 shards |
+| Cost of a no-change refresh | 0 D1 writes (after the diff) | **0 KV writes** |
+| Cost of a first population | 178% of the daily budget | **26 KV writes, 8 seconds** |
+| D1 rows for an instrument | 1 per symbol in existence | 1 per symbol the user *saved* |
+| Write amplification per saved row | 6 (3 indexes + FTS shadow) | ~2 (1 index) |
+
+Measured in production on 2026-09-06: 30,991 entries, 26 shards, 26 KV writes
+on first population, **0 on the second run**. Largest shard 206 KB against
+KV's 25 MB value limit, so there is room for further exchanges before any
+shard needs splitting.
+
+**How criterion 1 still holds.** Provider search returns no venue or currency,
+but it does distinguish listings by symbol suffix (`VOD`, `VOD.JO`, `VOD.VI`).
+Venue and currency come from the KV directory, keyed by the provider's own
+instrument id — *not* the display symbol, since `VOD` on NASDAQ and London
+share a display symbol and would silently overwrite each other.
+
+**What this trades away.** Search now requires the provider to be reachable,
+where a local index kept working through an outage. Given the alternative cost
+that is the right trade, and a failed directory refresh deliberately leaves the
+previous directory in place rather than emptying it.
+
+**Rejected: `/stock/profile2` as the metadata source.** It would have avoided
+the bulk list entirely, but it is unreliable on this tier — `VOD.JO` returns
+`{}`, and `VOD` returns London/EUR while search calls the same symbol a US ADR.
+Showing the user the wrong currency is worse than a nightly refresh.
+
+**Left in place deliberately:** the 30,991 rows the old design wrote to
+`instruments` in production. Deleting them would itself cost roughly 62,000
+billable writes, and they are harmless — Phase 4 upserts by
+`(provider, provider_instrument_id)`, so a saved item simply reuses one.

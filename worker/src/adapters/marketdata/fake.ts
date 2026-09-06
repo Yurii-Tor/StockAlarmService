@@ -3,6 +3,7 @@ import {
   type MarketDataProvider,
   type ProviderInstrument,
   type ProviderQuote,
+  type ProviderSearchHit,
 } from '../../app/ports/market-data';
 
 /**
@@ -127,9 +128,26 @@ export class FakeMarketDataProvider implements MarketDataProvider {
   readonly name = 'fake';
 
   /** Call counts, so tests can assert the cache actually prevents fetches. */
-  readonly calls = { listInstruments: 0, getQuote: 0 };
+  readonly calls = { listInstruments: 0, getQuote: 0, search: 0 };
 
   constructor(private readonly options: FakeProviderOptions = {}) {}
+
+  /** Substring match over symbol and name, like a real search endpoint. */
+  async search(query: string): Promise<ProviderSearchHit[]> {
+    this.calls.search += 1;
+    const q = query.trim().toUpperCase();
+    if (!q) return [];
+
+    return FAKE_INSTRUMENTS.filter(
+      (i) => i.symbol.toUpperCase().includes(q) || i.displayName.toUpperCase().includes(q),
+    ).map((i) => ({
+      // Mirrors the real provider: no mic, no currency. Those come from the
+      // directory, so a test that passes here would pass in production.
+      symbol: i.providerInstrumentId,
+      displayName: i.displayName,
+      assetType: i.assetType,
+    }));
+  }
 
   async listInstruments(exchange: string): Promise<ProviderInstrument[]> {
     this.calls.listInstruments += 1;

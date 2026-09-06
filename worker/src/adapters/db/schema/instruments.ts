@@ -10,11 +10,10 @@ import { instant, decimal, id, oneOf } from './_shared';
  * `MSFT` on NASDAQ and `MSFT` elsewhere are two rows, which is what makes
  * §B.1's "never automatically assume a ticker is unique" enforceable.
  *
- * This table is also the PRIMARY search surface, not a cache of one. Finnhub's
- * /search returns no exchange, MIC or currency and so cannot satisfy
- * acceptance criterion 1; /stock/symbol?exchange=US does return them, so a
- * nightly sync populates this table and search runs locally against the FTS5
- * index (see migration, and docs/02-assumptions.md §E).
+ * A row exists here ONLY for instruments the user has actually saved. The
+ * searchable directory lives in KV (see app/ports/instrument-directory.ts):
+ * holding ~31,000 rows here to support search cost 177,888 billable writes
+ * and took the whole Cloudflare account offline on 2026-09-05.
  */
 export const instruments = sqliteTable(
   'instruments',
@@ -43,10 +42,12 @@ export const instruments = sqliteTable(
     metadataUpdatedAt: instant('metadata_updated_at').notNull(),
   },
   (t) => [
+    // The only index this table needs. Search no longer runs here -- it is
+    // live against the provider, enriched from the KV directory -- so the
+    // former symbol/MIC and ISIN indexes were dropped in migration 0002.
+    // Every index on this table multiplies the billable write cost of saving
+    // an instrument, which is what made the original seed catastrophic.
     uniqueIndex('ux_instruments_provider_id').on(t.provider, t.providerInstrumentId),
-    // The disambiguation lookup for §B.1.
-    index('ix_instruments_symbol_mic').on(t.symbol, t.mic),
-    index('ix_instruments_isin').on(t.isin),
   ],
 );
 

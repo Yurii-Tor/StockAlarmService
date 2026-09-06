@@ -1,6 +1,5 @@
-import { exchangeNameForMic } from '../../domain/instruments/exchanges';
 import { toIsoInZone } from '../../domain/time/format';
-import type { StoredInstrument } from '../ports/instrument-repository';
+import type { ResolvedInstrument } from './search';
 import type { QuoteView } from './quotes';
 
 /**
@@ -28,7 +27,7 @@ export interface UserDefaults {
 }
 
 export interface InvestmentItemDraft {
-  instrumentId: string;
+  instrumentRef: string;
   symbol: string;
   name: string;
   assetType: string;
@@ -70,7 +69,7 @@ export interface DraftResponse {
 }
 
 export interface BuildDraftInput {
-  instrument: StoredInstrument;
+  instrument: ResolvedInstrument;
   quote: QuoteView;
   intent: Intent;
   defaults: UserDefaults;
@@ -85,11 +84,11 @@ export function buildDraft(input: BuildDraftInput): DraftResponse {
   const createdAt = toIsoInZone(now, timezone);
 
   const investmentItemDraft: InvestmentItemDraft = {
-    instrumentId: instrument.id,
+    instrumentRef: instrument.ref,
     symbol: instrument.symbol,
     name: instrument.displayName,
     assetType: instrument.assetType,
-    exchange: instrument.exchange ?? exchangeNameForMic(instrument.mic),
+    exchange: instrument.exchange,
     mic: instrument.mic,
     currency: instrument.currency,
     isin: instrument.isin,

@@ -104,9 +104,9 @@ break something unrelated — and once did.
 
 | Schedule | Job | Purpose |
 |---|---|---|
-| `* * * * *` | dispatch tick | Materialize due occurrences, run the §H.1 algorithm, enqueue deliveries |
-| `*/5 * * * *` | quote refresh | Only instruments with active price targets |
-| `0 3 * * *` | nightly | Finnhub symbol-universe sync, retention pruning, overdue digest |
+| `* * * * *` | dispatch tick | Phase 5. **Not registered** until then. An empty per-minute cron costs 1,440 invocations a day for nothing |
+| `*/5 * * * *` | quote refresh | Phase 9. **Not registered** until then |
+| `0 3 * * *` | nightly | Refreshes the **KV** instrument directory. Writes nothing to D1. Watch `kvWrites` in the `directory_refresh` log line: it should normally be **0**, and the KV budget is 1,000 writes/day |
 
 ## 6. Time zone data (ADR-0003)
 
@@ -197,3 +197,22 @@ Sign-in then starts at `/api/v1/auth/sign-in/social` with `{"provider":"google"}
 
 **Do not** put the client secret in `wrangler.jsonc` or `.dev.vars.example`.
 For local development it belongs in `.dev.vars`, which is gitignored.
+
+
+## 10. Repopulating the instrument directory
+
+The directory lives in KV, not D1, and the nightly cron keeps it current. To
+force a refresh (after adding an exchange, or on a fresh environment):
+
+```
+npx wrangler secret put ADMIN_TOKEN
+curl -X POST https://stockalarm.torproduction.com/api/v1/admin/refresh-directory   -H "authorization: Bearer <token>"
+```
+
+Expect roughly: `entries 30991, shards 26, kvWrites 26` on a first run and
+**`kvWrites 0`** on any run after that. A run that writes every shard means
+the change comparison has broken; the KV budget is 1,000 writes/day.
+
+Add an exchange by extending `SYNCED_EXCHANGES` in
+`worker/src/app/instruments/directory-refresh.ts` and refreshing. Shards are
+keyed by symbol, not by exchange, so nothing else has to change.

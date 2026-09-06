@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
-import { searchInstruments } from '../app/instruments/search';
+import { searchInstruments, resolveInstrument } from '../app/instruments/search';
 import { getQuote } from '../app/instruments/quotes';
 import { buildDraft, type Intent, type UserDefaults } from '../app/instruments/draft';
-import { D1InstrumentRepository } from '../adapters/db/instrument-repository';
 import { KvCallBudget, KvQuoteCache } from '../adapters/cache/kv-quote-cache';
+import { KvInstrumentDirectory } from '../adapters/cache/kv-instrument-directory';
 import { createProvider } from '../adapters/marketdata';
 import { schema } from '../adapters/db/client';
 import { isValidTimeZone } from '../domain/time/format';
@@ -29,37 +29,45 @@ instruments.get('/instruments/search', async (c) => {
   const limitRaw = Number(c.req.query('limit') ?? '20');
   const limit = Number.isFinite(limitRaw) ? limitRaw : 20;
 
-  const repo = new D1InstrumentRepository(c.env.DB);
-  const result = await searchInstruments(repo, q, {
-    limit,
-    ...(assetType ? { assetType } : {}),
-  });
+  const result = await searchInstruments(
+    createProvider(c.env),
+    new KvInstrumentDirectory(c.env.CACHE),
+    q,
+    { limit, ...(assetType ? { assetType } : {}) },
+  );
 
   return c.json(result);
 });
 
-instruments.get('/instruments/:id', async (c) => {
+instruments.get('/instruments/:ref', async (c) => {
   const session = await requireSession(c);
   if (!session) return problem(c, 401, 'Unauthorized', 'Sign in to view instruments.');
 
-  const repo = new D1InstrumentRepository(c.env.DB);
-  const instrument = await repo.findById(c.req.param('id'));
-  if (!instrument) return problem(c, 404, 'Not Found', 'No such instrument.');
+  const instrument = await resolveInstrument(
+    createProvider(c.env),
+    new KvInstrumentDirectory(c.env.CACHE),
+    decodeURIComponent(c.req.param('ref')),
+  );
+  if (!instrument) return problem(c, 404, 'Not Found', 'Unrecognised instrument reference.');
 
   return c.json(instrument);
 });
 
-instruments.get('/instruments/:id/quote', async (c) => {
+instruments.get('/instruments/:ref/quote', async (c) => {
   const session = await requireSession(c);
   if (!session) return problem(c, 401, 'Unauthorized', 'Sign in to view quotes.');
 
-  const repo = new D1InstrumentRepository(c.env.DB);
-  const instrument = await repo.findById(c.req.param('id'));
-  if (!instrument) return problem(c, 404, 'Not Found', 'No such instrument.');
+  const provider = createProvider(c.env);
+  const instrument = await resolveInstrument(
+    provider,
+    new KvInstrumentDirectory(c.env.CACHE),
+    decodeURIComponent(c.req.param('ref')),
+  );
+  if (!instrument) return problem(c, 404, 'Not Found', 'Unrecognised instrument reference.');
 
   const quote = await getQuote(
     {
-      provider: createProvider(c.env),
+      provider,
       cache: new KvQuoteCache(c.env.CACHE),
       clock: c.get('clock'),
       budget: new KvCallBudget(c.env.CACHE, () => c.get('clock').now()),
@@ -80,14 +88,14 @@ instruments.post('/investment-items/draft-from-instrument', async (c) => {
   if (!session) return problem(c, 401, 'Unauthorized', 'Sign in to create a draft.');
 
   const body = (await c.req.json().catch(() => null)) as {
-    instrumentId?: string;
+    instrumentRef?: string;
     intent?: string;
     useLatestQuoteAsEntryPrice?: boolean;
     timezone?: string;
   } | null;
 
-  if (!body?.instrumentId) {
-    return problem(c, 400, 'Bad Request', 'instrumentId is required.');
+  if (!body?.instrumentRef) {
+    return problem(c, 400, 'Bad Request', 'instrumentRef is required.');
   }
 
   const intent: Intent = body.intent === 'open' ? 'open' : 'watching';
@@ -100,9 +108,13 @@ instruments.post('/investment-items/draft-from-instrument', async (c) => {
   }
 
   const db = c.get('db');
-  const repo = new D1InstrumentRepository(c.env.DB);
-  const instrument = await repo.findById(body.instrumentId);
-  if (!instrument) return problem(c, 404, 'Not Found', 'No such instrument.');
+  const provider = createProvider(c.env);
+  const instrument = await resolveInstrument(
+    provider,
+    new KvInstrumentDirectory(c.env.CACHE),
+    body.instrumentRef,
+  );
+  if (!instrument) return problem(c, 404, 'Not Found', 'Unrecognised instrument reference.');
 
   const [settings] = await db
     .select()
@@ -124,7 +136,7 @@ instruments.post('/investment-items/draft-from-instrument', async (c) => {
 
   const quote = await getQuote(
     {
-      provider: createProvider(c.env),
+      provider,
       cache: new KvQuoteCache(c.env.CACHE),
       clock: c.get('clock'),
       budget: new KvCallBudget(c.env.CACHE, () => c.get('clock').now()),

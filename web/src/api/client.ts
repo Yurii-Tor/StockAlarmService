@@ -55,11 +55,13 @@ export const api = {
   searchInstruments: (query: string, signal?: AbortSignal) =>
     request<SearchResponse>(`/instruments/search?q=${encodeURIComponent(query)}`, { signal }),
 
-  quote: (instrumentId: string, refresh = false) =>
-    request<Quote>(`/instruments/${instrumentId}/quote${refresh ? '?refresh=true' : ''}`),
+  quote: (instrumentRef: string, refresh = false) =>
+    request<Quote>(
+      `/instruments/${encodeURIComponent(instrumentRef)}/quote${refresh ? '?refresh=true' : ''}`,
+    ),
 
   draftFromInstrument: (body: {
-    instrumentId: string;
+    instrumentRef: string;
     intent: 'watching' | 'open';
     useLatestQuoteAsEntryPrice?: boolean;
     timezone?: string;
