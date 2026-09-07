@@ -85,6 +85,14 @@ export default tseslint.config(
   },
 
   {
+    // Build tooling runs in Node, not in workerd.
+    files: ['scripts/**/*.mjs', 'playwright.config.ts', 'tests/e2e/**/*.ts'],
+    languageOptions: {
+      globals: { console: 'readonly', process: 'readonly', fetch: 'readonly' },
+    },
+  },
+
+  {
     files: ['**/*.ts'],
     rules: {
       '@typescript-eslint/consistent-type-imports': 'error',

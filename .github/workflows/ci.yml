@@ -3,6 +3,9 @@ name: CI
 on:
   push: { branches: [main, develop] }
   pull_request:
+  # Lets a run be re-triggered by hand. Useful when GitHub drops a push event,
+  # which it did while this workflow was being added.
+  workflow_dispatch:
 
 jobs:
   verify:
@@ -32,3 +35,40 @@ jobs:
 
       - name: Build web
         run: npm run build
+
+      # WebKit at an iPhone viewport: the engine and form factor ADR-0005
+      # targets. These catch what API tests structurally cannot -- cookie
+      # rules, rendered labels, and which handler actually answers a browser
+      # navigation.
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps webkit
+
+      # .dev.vars is gitignored, so CI has to write its own. Without it
+      # APP_BASE_URL falls back to the production https URL, session cookies
+      # are marked Secure over http, and every browser drops them silently --
+      # the exact failure these tests exist to catch.
+      - name: Write local dev vars
+        run: |
+          cat > .dev.vars <<'VARS'
+          APP_BASE_URL="http://localhost:4321"
+          EMAIL_TRANSPORT="console"
+          MARKET_DATA_PROVIDER="fake"
+          ADMIN_TOKEN="local-dev-admin-token"
+          BETTER_AUTH_SECRET="ci-only-not-a-real-secret"
+          VARS
+
+      # The e2e suite talks to a real local D1. Its tables have to exist
+      # before the first test deletes from them.
+      - name: Apply migrations to the local database
+        run: npm run db:migrate:local
+
+      - name: Browser acceptance tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

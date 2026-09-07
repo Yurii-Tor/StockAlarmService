@@ -11,7 +11,15 @@
   "assets": {
     "directory": "./web/dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+
+    // Without this, the asset worker answers browser NAVIGATIONS before the
+    // Worker runs, and single-page-application handling returns index.html.
+    // API paths then look fine to fetch() and curl (Accept: */*) while a real
+    // browser navigation gets the SPA -- which broke magic-link sign-in
+    // completely: clicking the link in the email returned the app shell and
+    // signed nobody in. Verified in production before this was added.
+    "run_worker_first": ["/api/*"]
   },
 
   "d1_databases": [

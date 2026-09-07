@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { resetDatabase, seedDirectory, signIn } from './helpers';
+import { resetDatabase, seedDirectory, signIn, uniqueEmail } from './helpers';
 
 /**
  * Acceptance criterion 1, and §B.1's hard rule about duplicate tickers.
@@ -8,10 +8,15 @@ import { resetDatabase, seedDirectory, signIn } from './helpers';
  * that the UI refuses to choose between two listings on the user's behalf.
  */
 test.describe('AC-01: search and disambiguation', () => {
-  test.beforeEach(async ({ page, baseURL }) => {
+  test.beforeAll(async ({ baseURL }) => {
+    // Once per file: the reset and the directory refresh are both idempotent,
+    // and per-user scoping keeps tests from seeing each other's items.
     resetDatabase();
     await seedDirectory(baseURL!);
-    await signIn(page, `ac01-${Date.now()}@example.com`, baseURL!);
+  });
+
+  test.beforeEach(async ({ page, baseURL }) => {
+    await signIn(page, uniqueEmail('ac01'), baseURL!);
     await page.goto('/add');
   });
 

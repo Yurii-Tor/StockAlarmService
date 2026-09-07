@@ -74,3 +74,48 @@ These are binding but not covered by §I, so they need their own tests or they w
 | 8 | — (hardens 9, 10) | Quiet-hours event: inbox immediate, push deferred, nothing lost |
 | 9 | — | Targets reuse the pipeline with zero pipeline changes |
 | 10 | all 12 re-verified | CI green from a clean clone |
+
+
+## Browser-level tests
+
+`tests/e2e/` runs 14 Playwright specs against **WebKit at an iPhone viewport** —
+the engine and form factor ADR-0005 targets. They run in CI.
+
+They found a bug nothing else could have:
+
+> **A browser navigation to the magic-link verification URL returned the SPA
+> shell instead of signing the user in.** Cloudflare's asset worker answers
+> navigations before the Worker runs, so `fetch()` and curl — which send
+> `Accept: */*` — got the correct 302, while a real user clicking the link in
+> their email got the app shell and no session. **Confirmed in production**
+> before the fix, which is `assets.run_worker_first: ["/api/*"]`.
+
+Every earlier check missed it. The API tests call `fetch`; the manual browser
+checks called `fetch` from the page console, which is not a navigation either;
+and curl sends no navigation `Accept` header. Only a real navigation
+reproduces it.
+
+Two smaller findings from the same work:
+
+- **Refreshing the instrument directory one exchange at a time deletes the
+  others.** Shards are keyed by leading symbol character, not by exchange, so
+  `VOD` (NASDAQ) and `VOD.L` (London) share shard `V` and the second refresh
+  wiped the first. The admin endpoint now takes the complete set
+  (`?exchanges=US,L`), and the port states that a refresh is a full replace.
+  Latent in production, where only US is synced — it would have surfaced the
+  first time a second exchange was added.
+- `wrangler dev` substitutes the production host declared in `routes`, which
+  made Better Auth reject every local sign-in with 403.
+  `scripts/dev-config.mjs` generates a dev config with `routes` removed. The
+  same substitution caused the earlier `Secure`-cookie bug, so this removes a
+  recurring cause rather than working around it twice.
+
+### Criteria 1–4 now have browser coverage
+
+| Spec | Covers |
+|---|---|
+| `ac-01-search-disambiguation` | Criterion 1, and §B.1's rule that a duplicate ticker is never auto-selected |
+| `ac-02-prefill` | Criterion 2, plus regressions for the ISO-timestamp and lowercase-asset-type bugs |
+| `ac-03-buy-intent` | Criterion 3 — Save stays disabled until quantity, then unlocks |
+| `ac-04-save-without-reminder` | Criterion 4 — the screen never asks for a reminder |
+| `thesis-versioning` | FR-054 — version 1 stays readable after a revision |

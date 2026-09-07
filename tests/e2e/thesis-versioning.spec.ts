@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { resetDatabase, seedDirectory, signIn } from './helpers';
+import { resetDatabase, seedDirectory, signIn, uniqueEmail } from './helpers';
 
 /**
  * FR-054: a thesis revision never overwrites the previous one.
@@ -12,7 +12,7 @@ test.describe('thesis versioning', () => {
   test('keeps the original version readable after a revision', async ({ page, baseURL }) => {
     resetDatabase();
     await seedDirectory(baseURL!);
-    await signIn(page, `thesis-${Date.now()}@example.com`, baseURL!);
+    await signIn(page, uniqueEmail('thesis'), baseURL!);
 
     await page.goto('/add');
     await page.getByTestId('ticker-search').fill('MSFT');

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { resetDatabase, seedDirectory, signIn } from './helpers';
+import { resetDatabase, seedDirectory, signIn, uniqueEmail } from './helpers';
 
 /**
  * Acceptance criterion 3: "I bought it" fills date, price and fees, and leaves
@@ -10,10 +10,15 @@ import { resetDatabase, seedDirectory, signIn } from './helpers';
  * the Save button stays disabled until quantity is entered, and then unlocks.
  */
 test.describe('AC-03: purchase defaults', () => {
-  test.beforeEach(async ({ page, baseURL }) => {
+  test.beforeAll(async ({ baseURL }) => {
+    // Once per file: the reset and the directory refresh are both idempotent,
+    // and per-user scoping keeps tests from seeing each other's items.
     resetDatabase();
     await seedDirectory(baseURL!);
-    await signIn(page, `ac03-${Date.now()}@example.com`, baseURL!);
+  });
+
+  test.beforeEach(async ({ page, baseURL }) => {
+    await signIn(page, uniqueEmail('ac03'), baseURL!);
     await page.goto('/add');
     await page.getByTestId('ticker-search').fill('MSFT');
     await page.getByTestId('search-results').getByRole('button').first().click();
